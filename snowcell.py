@@ -29,7 +29,7 @@ class Snowcell(Cell):
         self.width = w
         self.height = h
         self.snow = snow
-        self.snow_array = self.snow.snowArray
+        self.cells = self.snow.cells
         XY = self.snow.getXYFromIndex(x, y)
         self.polar = self.snow.getPolarFromXY(XY[0], XY[1])
         self.neighbours = []
@@ -61,17 +61,14 @@ class Snowcell(Cell):
                         self.newDiffusionMass += self.getDiffusionMass()
                     else:
                         self.newDiffusionMass += cell.getDiffusionMass()
-                #  my own diffusion mass
-                self.newDiffusionMass += self.getDiffusionMass()
-                self.newDiffusionMass /= (len(self.neighbours) + 1)
             else:
                 #  discrete diffusion with uniform weight of 1/7
                 for cell in self.neighbours:
                     #  cell.printState();
                     self.newDiffusionMass += cell.getDiffusionMass()
-                #  my own diffusion mass
-                self.newDiffusionMass += self.getDiffusionMass()
-                self.newDiffusionMass /= (len(self.neighbours) + 1)
+            #  my own diffusion mass
+            self.newDiffusionMass += self.getDiffusionMass()
+            self.newDiffusionMass /= (len(self.neighbours) + 1)
         else:
             self.newDiffusionMass = self.diffusionMass
             #  should always be 0?
@@ -84,8 +81,8 @@ class Snowcell(Cell):
     def doFreezing(self):
         self.diffusionMass = self.newDiffusionMass
         if self.boundary:
-            self.newBoundaryMass = self.boundaryMass + (1 - self.snow.k) * self.diffusionMass
-            self.newCrystalMass = self.crystalMass + self.snow.k * self.diffusionMass
+            self.newBoundaryMass = self.boundaryMass + (1 - self.snow.kappa) * self.diffusionMass
+            self.newCrystalMass = self.crystalMass + self.snow.kappa * self.diffusionMass
             #  surely this next bit can't be right?
             self.diffusionMass = 0
             # changed = true;
@@ -99,7 +96,7 @@ class Snowcell(Cell):
         self.crystalMass = self.newCrystalMass
         if self.boundary:
             if self.attachedNeighbours <= 2:
-                if self.boundaryMass > self.snow.b:
+                if self.boundaryMass > self.snow.beta:
                     self.newState = True
             elif self.attachedNeighbours == 3:
                 if self.boundaryMass >= 1:
@@ -118,9 +115,9 @@ class Snowcell(Cell):
     #  step 4
     def doMelting(self):
         if self.boundary:
-            self.diffusionMass = self.diffusionMass + self.snow.u * self.boundaryMass + self.snow.y * self.crystalMass
-            self.crystalMass = (1 - self.snow.y) * self.crystalMass
-            self.boundaryMass = (1 - self.snow.u) * self.boundaryMass
+            self.diffusionMass = self.diffusionMass + self.snow.mu * self.boundaryMass + self.snow.upsilon * self.crystalMass
+            self.crystalMass = (1 - self.snow.upsilon) * self.crystalMass
+            self.boundaryMass = (1 - self.snow.upsilon) * self.boundaryMass
             # changed = true;
 
     def updateState(self):
@@ -196,22 +193,22 @@ class Snowcell(Cell):
         x = self.X
         y = self.Y
         if x > 1:
-            neigboursTmp.append(self.snow_array[x - 1][y])
+            neigboursTmp.append(self.cells[x - 1][y])
         if x < self.width - 1:
-            neigboursTmp.append(self.snow_array[x + 1][y])
+            neigboursTmp.append(self.cells[x + 1][y])
         if y > 1:
-            neigboursTmp.append(self.snow_array[x][y - 1])
+            neigboursTmp.append(self.cells[x][y - 1])
         if y < self.height - 1:
-            neigboursTmp.append(self.snow_array[x][y + 1])
+            neigboursTmp.append(self.cells[x][y + 1])
         if y % 2 == 0:
             if (x < self.width - 1) and (y > 1):
-                neigboursTmp.append(self.snow_array[x + 1][y - 1])
+                neigboursTmp.append(self.cells[x + 1][y - 1])
             if (x < self.width - 1) and (y < self.height - 1):
-                neigboursTmp.append(self.snow_array[x + 1][y + 1])
+                neigboursTmp.append(self.cells[x + 1][y + 1])
         else:
             if (x > 1) and (y > 1):
-                neigboursTmp.append(self.snow_array[x - 1][y - 1])
+                neigboursTmp.append(self.cells[x - 1][y - 1])
             if (x > 1) and (y < self.height - 1):
-                neigboursTmp.append(self.snow_array[x - 1][y + 1])
+                neigboursTmp.append(self.cells[x - 1][y + 1])
         #self.neighbours = neigboursTmp.toArray([None]*len(neigboursTmp))
         self.neighbours = neigboursTmp[:]

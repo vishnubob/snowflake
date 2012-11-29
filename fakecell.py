@@ -8,13 +8,12 @@ class Fakecell(Cell):
     fakeY = int()
     polar = (0.0, 0.0)
     segment = 0
-    snowarray = Cell()
 
     def __init__(self, x, y, w, h, snow):
         """ generated source for method __init__ """
         super(Fakecell, self).__init__()
         self.snow = snow
-        self.snowarray = self.snow.snowArray
+        self.cells = self.snow.cells
         XY = self.snow.getXYFromIndex(x, y)
         self.polar = self.snow.getPolarFromXY(*XY)
         # map from 0 to 2PI
@@ -41,13 +40,13 @@ class Fakecell(Cell):
         # if( fakeIndex[1] % 2 == 0 && fakeIndex[0] > 0)
         # fakeIndex[0] --;
         try:
-            self.mirror = self.snowarray[fakeIndex[0]][fakeIndex[1]]
+            self.mirror = self.cells[fakeIndex[0]][fakeIndex[1]]
             self.fakeX = fakeIndex[0]
             self.fakeY = fakeIndex[1]
         except KeyError:
-            self.mirror = self.snowarray[snow.Xcells - 1][snow.Ycells - 1]
-            self.fakeX = snow.Xcells - 1
-            self.fakeY = snow.Ycells - 1
+            self.mirror = self.cells[snow.x_cells - 1][snow.y_cells - 1]
+            self.fakeX = snow.x_cells - 1
+            self.fakeY = snow.y_cells - 1
 
     def getPolar(self):
         """ generated source for method getPolar """
