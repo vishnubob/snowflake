@@ -71,6 +71,10 @@ class SnowflakeCell(object):
         if self.__neighbors == None:
             self.__neighbors = self.lattice.get_neighbors(self.xy)
         return self.__neighbors
+    
+    @property
+    def attached_neighbors(self):
+        return [cell for cell in self.neighbors if cell.frozen]
 
     @property
     def frozen(self):
@@ -100,109 +104,37 @@ class SnowflakeCell(object):
     def freezing_step(self):
         self.diffusive_mass = self._next_dm
         if self.boundary:
+            self._next_bm = self.boundary_mass + (1 - self.env.kappa) * self.diffusive_mass
+            self._next_cm = self.crystal_mass + self.env.kappa * self.diffusive_mass
             self.diffusive_mass = 0
-            self._next_bm = self.boundaryMass + (1 - self.env.kappa) * self.diffusionMass
-            self.newCrystalMass = self.crystalMass + self.env.kappa * self.diffusionMass
-        elif self.frozen:
-            pass
         else:
-            self._next_bm = self.boundaryMass
-            self.newCrystalMass = self.crystalMass
+            self._next_bm = self.boundary_mass
+            self._next_cm = self.crystal_mass
 
-    #  step 3
-    def doAttachment(self):
-        self.boundaryMass = self._next_bm
-        self.crystalMass = self.newCrystalMass
+    def attachment_step(self):
+        self.boundary_mass = self._next_bm
+        self.crystal_mass = self._next_cm
         if self.boundary:
-            if self.attachedNeighbours <= 2:
-                if self.boundaryMass > self.snow.beta:
-                    self.newState = True
-            elif self.attachedNeighbours == 3:
+            if len(self.attached_neighbors) <= 2:
+                if self.boundary_mass > self.env.beta:
+                    self.frozen = True
+            elif len(self.attached_neighbors) == 3:
                 if self.boundaryMass >= 1:
-                    self.newState = True
+                    self.frozen = True
                 else:
-                    summedDiffusion = self.diffusionMass
+                    summed_diffusion = self.diffusive_mass
                     for cell in self.neighbors:
-                        summedDiffusion += cell.getDiffusionMass()
-                    if summedDiffusion < self.snow.theta and self.boundaryMass >= self.snow.alpha:
-                        self.newState = True
-            elif self.attachedNeighbours >= 4:
-                self.newState = True
-        # if (newState)
-        # changed = true;
+                        summed_diffusion += cell.diffusive_mass
+                    if summed_diffusion < self.env.theta and self.boundary_mass >= self.env.alpha:
+                        self.frozen = True
+            elif len(self.attached_neighbors) >= 4:
+                self.frozen = True
 
-    #  step 4
-    def doMelting(self):
+    def melt_step(self):
         if self.boundary:
-            self.diffusionMass = self.diffusionMass + self.snow.mu * self.boundaryMass + self.snow.upsilon * self.crystalMass
-            self.crystalMass = (1 - self.snow.upsilon) * self.crystalMass
-            self.boundaryMass = (1 - self.snow.upsilon) * self.boundaryMass
-            # changed = true;
-
-    def updateState(self):
-        if self.newState:
-            self.newState = False
-            self.state = True
-            self.crystalMass = self.boundaryMass + self.crystalMass
-            self.diffusionMass = 0
-            self.boundaryMass = 0
-            self.boundary = False
-            self.doCalc = False
-
-    def updateNeighbours(self):
-        #  finishing the freeze
-        if self.state == False:
-            self.attachedNeighbours = 0
-            for cell in self.neighbors:
-                if cell.getState():
-                    self.boundary = True
-                    self.attachedNeighbours += 1
-        self.oldDiffusionMass = self.diffusionMass
-
-    def doCalcs(self):
-        if self.state:
-            return False
-        if self.boundary:
-            return True
-        if self.doCalc:
-            return True
-        return False
-
-    def setState(self):
-        self.state = True
-        self.diffusionMass = 0
-        self.boundaryMass = 0
-        self.crystalMass = 1
-        self.boundary = False
-
-    def getState(self):
-        return self.state
-
-    def getAttachedNeighbours(self):
-        return self.attachedNeighbours
-
-    def getBoundary(self):
-        return self.boundary
-
-    def setDiffusionMass(self, mass):
-        self.diffusionMass = mass
-
-    def getDiffusionMass(self):
-        return self.diffusionMass
-
-    def getCrystalMass(self):
-        return self.crystalMass
-
-    def getBoundaryMass(self):
-        return self.boundaryMass
-
-    def printState(self):
-        print self.state, self.diffusionMass, self.boundaryMass, self.crystalMass, seld.boundary
-        #  System.out.print( "x:" + nf( X, 3 ) + " y:" + nf( Y, 3 ) + " df: " +
-        #  nf( diffusionMass, 1, 2 ) );
-        #  System.out.print( " state:" + state );
-        #  print "";
-
+            self.diffusive_mass = self.diffusive_mass + self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
+            self.crystalMass = (1 - self.env.upsilon) * self.crystal_mass
+            self.boundaryMass = (1 - self.env.upsilon) * self.boundary_mass
 
 
 class Snowcell(Cell):
