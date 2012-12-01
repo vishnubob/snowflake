@@ -1,10 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env pypy
 
 import random
 import math
+import argparse
+import cPickle as pickle
+import logging
 
 import Image
 import ImageDraw
+
+logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
+log = logging.info
 
 def polar_to_xy(args):
     (angle, distance) = args
@@ -26,6 +32,12 @@ class CrystalEnvironment(dict):
 
     def __getattr__(self, name):
         return self[name]
+
+    def __getstate__(self):
+        return dict(self)
+
+    def __setstate__(self, state):
+        self.update(state)
 
     def _init_defaults(self):
         # (3a) 
@@ -58,31 +70,56 @@ class CrystalEnvironment(dict):
         self["sigma"] = 0.00001
         self["sigma"] = 0
 
+        # initial diffusion
+        self["gamma"] = 0.5
+
 class CrystalLattice(object):
-    # technically a "pie slice"
-    def __init__(self, radius, angle=60, environment=None, celltype=None):
+    def __init__(self, radius, angle=120, environment=None, celltype=None):
         self.radius = radius
         self.angle = angle
         if environment == None:
-            self.environment = CrystalEnvironment()
+            environment = CrystalEnvironment()
+        self.environment = environment
         if celltype == None:
             celltype = SnowflakeCell
         self.celltype = celltype
         self.iteration = 1
         self._init_cells()
 
+    def save_lattice(self, fn):
+        msg = "Saving %s..." % fn
+        log(msg)
+        f = open(fn, 'w')
+        pickle.dump(self, f)
+
+    @classmethod
+    def load_lattice(cls, fn):
+        msg = "Loading %s..." % fn
+        log(msg)
+        f = open(fn)
+        obj = pickle.load(f)
+        for cell in obj.cells:
+            cell.lattice = obj
+            cell.env = obj.environment
+        return obj
+
     def get_neighbors(self, xy):
         (x, y) = xy
+        nlist = [(x, y + 1), (x, y - 1), (x - 1, y), (x + 1, y), (x - 1, y - 1), (x + 1, y + 1)]
         # up, down, left, right
-        nlist = [(x, y + 1), (x, y - 1), (x - 1, y), (x + 1, y)]
+        #nlist = [(x, y + 1), (x, y - 1), (x - 1, y), (x + 1, y)]
         # next is tricky
-        if y & 1:
-            nlist += [(x - 1, y + 1), (x - 1, y - 1)]
-        else:
-            nlist += [(x + 1, y + 1), (x + 1, y - 1)]
-        nlist = map(self._cell_index, nlist)
-        nlist = filter(lambda x: x > 0 and x < len(self.cells), nlist)
-        return tuple([self.cells[nidx] for nidx in nlist if self.cells[nidx] != None])
+        #if y & 1:
+        #    nlist += [(x + 1, y + 1), (x + 1, y - 1)]
+        #else:
+        #    nlist += [(x - 1, y + 1), (x - 1, y - 1)]
+        nlist = map(self._cell_index, filter(self._xy_ok, nlist))
+        res = tuple([self.cells[nidx] for nidx in nlist if self.cells[nidx] != None])
+        return res
+
+    def reality_check(self):
+        for cell in self.cells:
+            cell.reality_check()
 
     def _init_cells(self):
         self.cells = [None] * (self.radius * self.radius)
@@ -94,10 +131,15 @@ class CrystalLattice(object):
                 cell = self.celltype(xy, self)
                 idx = self._cell_index(xy)
                 self.cells[idx] = cell
-        idx = self._cell_index((self.radius / 2, self.radius / 2))
-        self.cells[idx].attached = True
-        self.cells[idx].crystal_mass = self.cells[idx].diffusive_mass
-        self.cells[idx].diffusive_mass = 0
+        self.reality_check()
+        #idx = self._cell_index((1, 1))
+        #self.cells[idx].attach(1)
+        center_pt = self._cell_index((self.radius / 2, self.radius / 2))
+        self.cells[center_pt].attach(1)
+
+    def _xy_ok(self, xy):
+        (x, y) = xy
+        return (x >= 0 and x < self.radius and y >= 0 and y < self.radius)
 
     def _cell_index(self, xy):
         (x, y) = xy
@@ -118,10 +160,10 @@ class CrystalLattice(object):
         bm = sum([cell.boundary_mass for cell in self.cells if cell])
         acnt = len([cell for cell in self.cells if cell and cell.attached])
         bcnt = len([cell for cell in self.cells if cell and cell.boundary])
-        print "Step #%d, %d attached cells, %d boundary cells, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
+        msg = "Step #%d, %d attached cells, %d boundary cells, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
+        log(msg)
 
     def step(self):
-        self.print_status()
         for cell in self.cells:
             if cell == None or cell.attached:
                 continue
@@ -130,14 +172,18 @@ class CrystalLattice(object):
             if cell == None or cell.attached:
                 continue
             cell.step_two()
+        for cell in self.cells:
+            if cell == None or cell.attached:
+                continue
+            cell.step_three()
         self.iteration += 1
 
     def headroom(self):
-        margin = self.radius * .95
+        margin = self.radius * .98
         for cell in self.cells:
             if cell == None:
                 continue
-            if not cell.boundary:
+            if not cell.attached:
                 continue
             # get angle
             (angle, distance) = xy_to_polar(cell.xy)
@@ -148,24 +194,33 @@ class CrystalLattice(object):
         return True
 
     def grow(self):
-        while self.headroom():
+        while True:
             self.step()
+            if self.iteration % 100 == 0:
+                self.print_status()
+                if not self.headroom():
+                    break
 
     def save_image(self, fn):
+        msg = "Saving %s..." % fn
+        log(msg)
         img = Image.new("RGB", (self.radius, self.radius))
         for (idx, cell) in enumerate(self.cells):
             if cell == None:
                 continue
             xy = self._cell_xy(idx)
+            color = (0, 0, 0)
             if cell.attached:
                 color = 200 * cell.crystal_mass
-            else:
-                color = 200 * cell.diffusive_mass
-            color = min(255, int(color))
-            color = (color, color, color)
+                color = min(255, int(color))
+                color = (color, color, color)
             img.putpixel(xy, color)
-        img = img.resize((int(10 * self.radius), int(10 * self.radius * (1 / math.sqrt(3)))))
+            # XXX: Diffusive Mass Color?
+            #else:
+            #    color = 200 * cell.diffusive_mass
+        #img = img.resize((int(10 * self.radius), int(10 * self.radius)))
         img = img.rotate(45)
+        img = img.resize((int(self.radius * (1 / math.sqrt(3))), int(self.radius)))
         img.save(fn)
 
 class SnowflakeCell(object):
@@ -173,20 +228,32 @@ class SnowflakeCell(object):
         self.xy = xy
         self.lattice = lattice
         self.env = lattice.environment
-        self.diffusive_mass = 0.2
+        self.diffusive_mass = self.env.gamma
         self.boundary_mass = 0.0
         self.crystal_mass = 0.0
         self.attached = False
         self.__neighbors = None
 
-    def reality_check(self, checklist=[]):
+    def __getstate__(self):
+        return (self.xy, self.diffusive_mass, self.boundary_mass, self.crystal_mass, self.attached)
+
+    def __setstate__(self, state):
+        self.xy = state[0]
+        self.diffusive_mass = state[1]
+        self.boundary_mass = state[2]
+        self.crystal_mass = state[3]
+        self.attached = state[4]
+        self.__neighbors = None
+        self.lattice = None
+        self.env = None
+
+    def reality_check(self):
+        assert len(self.neighbors)
         for neighbor in self.neighbors:
-            if neighbor in checklist:
-                continue
-            assert self in neighbor.neighbors
+            assert self in neighbor.neighbors, "%s not in %s" % (str(self), str(neighbor.neighbors))
 
-
-            
+    def __repr__(self):
+        return "(%d,%d)" % self.xy
 
     @property
     def neighbors(self):
@@ -211,6 +278,11 @@ class SnowflakeCell(object):
                 next_dm += cell.diffusive_mass
         return float(next_dm) / (len(self.neighbors) + 1)
 
+    def attach(self, offset=0.0):
+        self.crystal_mass = self.boundary_mass + self.crystal_mass + offset
+        self.boundary_mass = 0
+        self.attached = True
+
     def step_one(self):
         self._next_dm = 0
         if not self.attached:
@@ -218,43 +290,45 @@ class SnowflakeCell(object):
 
     def step_two(self):
         self.diffusive_mass = self._next_dm
-        if not self.attached:
+        self.attachment_flag = self.attached
+        if self.boundary:
             self.freezing_step()
-            self.attachment_step()
+            self.attachment_flag = self.attachment_step()
             self.melting_step()
 
+    def step_three(self):
+        if self.boundary and self.attachment_flag:
+            self.attach()
+
     def freezing_step(self):
-        if self.boundary:
-            self.boundary_mass += (1 - self.env.kappa) * self.diffusive_mass
-            self.crystal_mass += (self.env.kappa * self.diffusive_mass)
-            self.diffusive_mass = 0
+        assert self.boundary
+        self.boundary_mass += (1 - self.env.kappa) * self.diffusive_mass
+        self.crystal_mass += (self.env.kappa * self.diffusive_mass)
+        self.diffusive_mass = 0
 
     def attachment_step(self):
-        if self.boundary:
-            if len(self.attached_neighbors) <= 2:
-                if self.boundary_mass > self.env.beta:
-                    self.attached = True
-            elif len(self.attached_neighbors) == 3:
-                if self.boundary_mass >= 1:
-                    self.attached = True
-                else:
-                    summed_diffusion = self.diffusive_mass
-                    for cell in self.neighbors:
-                        summed_diffusion += cell.diffusive_mass
-                    if summed_diffusion < self.env.theta and self.boundary_mass >= self.env.alpha:
-                        self.attached = True
-            elif len(self.attached_neighbors) >= 4:
-                self.attached = True
-            # if this is true, we just became attached
-            if self.attached:
-                self.crystal_mass = self.boundary_mass + self.crystal_mass
-                self.boundary_mass = 0
-
+        assert self.boundary
+        if len(self.attached_neighbors) <= 2:
+            if self.boundary_mass > self.env.beta:
+                return True
+        elif len(self.attached_neighbors) == 3:
+            if self.boundary_mass >= 1:
+                return True
+            else:
+                summed_diffusion = self.diffusive_mass
+                for cell in self.neighbors:
+                    summed_diffusion += cell.diffusive_mass
+                if summed_diffusion < self.env.theta and self.boundary_mass >= self.env.alpha:
+                    return True
+        elif len(self.attached_neighbors) >= 4:
+            return True
+        return False
+    
     def melting_step(self):
-        if self.boundary:
-            self.diffusive_mass += self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
-            self.boundary_mass = (1 - self.env.mu) * self.boundary_mass
-            self.crystal_mass = (1 - self.env.upsilon) * self.crystal_mass
+        assert self.boundary
+        self.diffusive_mass += self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
+        self.boundary_mass = (1 - self.env.mu) * self.boundary_mass
+        self.crystal_mass = (1 - self.env.upsilon) * self.crystal_mass
 
     def noise_step(self):
         if random.choice([True, False]):
@@ -262,8 +336,42 @@ class SnowflakeCell(object):
         else:
             self.diffusive_mass = (1 + self.env.sigma) * self.diffusive_mass
 
-try:
-    cl = CrystalLattice(40)
-    cl.grow()
-finally:
-    cl.save_image("sf.bmp")
+DEFAULTS = {
+    "radius": 200,
+    "name": "snowflake",
+    "load": False,
+    "env": '',
+}
+
+def get_cli():
+    parser = argparse.ArgumentParser(description='Snowflake Generator.')
+    parser.add_argument('-s', '--size', dest="radius", type=int, help="The size of the snowflake.")
+    parser.add_argument('-n', '--name', dest="name",  help="The name of the snowflake.")
+    parser.add_argument('-l', '--load', dest='load', action='store_true', help='Load the pickle file.')
+    parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
+
+    parser.set_defaults(**DEFAULTS)
+    args = parser.parse_args()
+    return args
+
+def run():
+    msg = "Snowflake Generator v0.1"
+    log(msg)
+    args = get_cli()
+    pfn = "%s.pickle" % args.name
+    ifn = "%s.png" % args.name
+    if args.load:
+        cl = CrystalLattice.load_lattice(pfn)
+        cl.save_image(ifn)
+    else:
+        mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
+        env = CrystalEnvironment(mods)
+        cl = CrystalLattice(args.radius, environment=env)
+        try:
+            cl.grow()
+        finally:
+            cl.save_image(ifn)
+            cl.save_lattice(pfn)
+
+if __name__ == "__main__":
+    run()
