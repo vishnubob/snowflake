@@ -122,11 +122,14 @@ class CrystalLattice(object):
 
     def step(self):
         self.print_status()
-        for step in range(5):
-            for cell in self.cells:
-                if cell == None or cell.attached:
-                    continue
-                cell.step(step)
+        for cell in self.cells:
+            if cell == None or cell.attached:
+                continue
+            cell.step_one()
+        for cell in self.cells:
+            if cell == None or cell.attached:
+                continue
+            cell.step_two()
         self.iteration += 1
 
     def headroom(self):
@@ -176,6 +179,15 @@ class SnowflakeCell(object):
         self.attached = False
         self.__neighbors = None
 
+    def reality_check(self, checklist=[]):
+        for neighbor in self.neighbors:
+            if neighbor in checklist:
+                continue
+            assert self in neighbor.neighbors
+
+
+            
+
     @property
     def neighbors(self):
         if self.__neighbors == None:
@@ -190,35 +202,31 @@ class SnowflakeCell(object):
     def boundary(self):
         return (not self.attached) and any([cell.attached for cell in self.neighbors])
 
-    def step(self, step):
-        if step == 0:
-            self.diffusion_step()
-        elif step == 1:
-            self.freezing_step()
-        elif step == 2:
-            self.attachment_step()
-        elif step == 3:
-            self.melting_step()
-        elif step == 4:
-            self.noise_step()
-        else:
-            raise ValueError, "Unknown step!"
+    def diffusion_calc(self):
+        next_dm = self.diffusive_mass
+        for cell in self.neighbors:
+            if cell.attached:
+                next_dm += self.diffusive_mass
+            else:
+                next_dm += cell.diffusive_mass
+        return float(next_dm) / (len(self.neighbors) + 1)
 
-    def diffusion_step(self):
+    def step_one(self):
+        self._next_dm = 0
         if not self.attached:
-            _next_dm = self.diffusive_mass
-            for cell in self.neighbors:
-                if cell.attached:
-                    _next_dm += self.diffusive_mass
-                else:
-                    _next_dm += cell.diffusive_mass
-            _next_dm /= (len(self.neighbors) + 1)
-            self.diffusive_mass = _next_dm
+            self._next_dm = self.diffusion_calc()
+
+    def step_two(self):
+        self.diffusive_mass = self._next_dm
+        if not self.attached:
+            self.freezing_step()
+            self.attachment_step()
+            self.melting_step()
 
     def freezing_step(self):
         if self.boundary:
-            self.boundary_mass = self.boundary_mass + (1 - self.env.kappa) * self.diffusive_mass
-            self.crystal_mass = self.crystal_mass + (self.env.kappa * self.diffusive_mass)
+            self.boundary_mass += (1 - self.env.kappa) * self.diffusive_mass
+            self.crystal_mass += (self.env.kappa * self.diffusive_mass)
             self.diffusive_mass = 0
 
     def attachment_step(self):
@@ -244,7 +252,7 @@ class SnowflakeCell(object):
 
     def melting_step(self):
         if self.boundary:
-            self.diffusive_mass = self.diffusive_mass + self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
+            self.diffusive_mass += self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
             self.boundary_mass = (1 - self.env.mu) * self.boundary_mass
             self.crystal_mass = (1 - self.env.upsilon) * self.crystal_mass
 
@@ -258,4 +266,4 @@ try:
     cl = CrystalLattice(40)
     cl.grow()
 finally:
-    cl.save_image("sf.png")
+    cl.save_image("sf.bmp")
