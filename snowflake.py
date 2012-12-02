@@ -106,13 +106,6 @@ class CrystalLattice(object):
     def get_neighbors(self, xy):
         (x, y) = xy
         nlist = [(x, y + 1), (x, y - 1), (x - 1, y), (x + 1, y), (x - 1, y - 1), (x + 1, y + 1)]
-        # up, down, left, right
-        #nlist = [(x, y + 1), (x, y - 1), (x - 1, y), (x + 1, y)]
-        # next is tricky
-        #if y & 1:
-        #    nlist += [(x + 1, y + 1), (x + 1, y - 1)]
-        #else:
-        #    nlist += [(x - 1, y + 1), (x - 1, y - 1)]
         nlist = map(self._cell_index, filter(self._xy_ok, nlist))
         res = tuple([self.cells[nidx] for nidx in nlist if self.cells[nidx] != None])
         return res
@@ -132,8 +125,6 @@ class CrystalLattice(object):
                 idx = self._cell_index(xy)
                 self.cells[idx] = cell
         self.reality_check()
-        #idx = self._cell_index((1, 1))
-        #self.cells[idx].attach(1)
         center_pt = self._cell_index((self.radius / 2, self.radius / 2))
         self.cells[center_pt].attach(1)
 
@@ -193,6 +184,40 @@ class CrystalLattice(object):
                 return False
         return True
 
+    def blur(self, radius=2):
+        msg = "Bluring..."
+        log(msg)
+        blurbuf = [0.0] * (self.radius * self.radius)
+        for x in range(self.radius):
+            for y in range(self.radius):
+                xy = (x, y)
+                idx = self._cell_index(xy)
+                cell = self.cells[idx]
+                if not cell.attached:
+                    continue
+                cnt = total = 0
+                for ky in range(-radius, radius):
+                    for kx in range(-radius, radius):
+                        kx += x
+                        ky += y
+                        if not self._xy_ok((kx, ky)):
+                            continue
+                        kidx = self._cell_index((kx, ky))
+                        kcell = self.cells[kidx]
+                        if not kcell.attached:
+                            continue
+                        total += kcell.crystal_mass
+                        cnt += 1
+                if cnt:
+                    adj = total / cnt
+                    print xy, cell.crystal_mass, adj
+                    blurbuf[idx] = adj
+
+        for (idx, cell) in enumerate(self.cells):
+            if not cell.attached:
+                continue
+            cell.crystal_mass = blurbuf[idx]
+
     def grow(self):
         while True:
             self.step()
@@ -214,11 +239,11 @@ class CrystalLattice(object):
                 color = 200 * cell.crystal_mass
                 color = min(255, int(color))
                 color = (color, color, color)
+            else:
+                color = 200 * cell.diffusive_mass
+                color = min(255, int(color))
+                color = (color, color, color)
             img.putpixel(xy, color)
-            # XXX: Diffusive Mass Color?
-            #else:
-            #    color = 200 * cell.diffusive_mass
-        #img = img.resize((int(10 * self.radius), int(10 * self.radius)))
         img = img.rotate(45)
         img = img.resize((int(self.radius * (1 / math.sqrt(3))), int(self.radius)))
         img.save(fn)
@@ -359,14 +384,17 @@ def run():
     log(msg)
     args = get_cli()
     pfn = "%s.pickle" % args.name
-    ifn = "%s.png" % args.name
+    ifn = "%s.bmp" % args.name
     if args.load:
         cl = CrystalLattice.load_lattice(pfn)
         cl.save_image(ifn)
     else:
-        mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
-        env = CrystalEnvironment(mods)
-        cl = CrystalLattice(args.radius, environment=env)
+        if args.env:
+            mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
+            env = CrystalEnvironment(mods)
+            cl = CrystalLattice(args.radius, environment=env)
+        else:
+            cl = CrystalLattice(args.radius)
         try:
             cl.grow()
         finally:

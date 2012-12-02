@@ -1,3 +1,1 @@
-surface(file = "snowflake_1.dat", center=true, convexity=50);
-$translate([0, 0, 100])
-    cube([200, 200, 200], center=true);
+linear_extrude(height=.15, scale=30, layer="0") import("snowflake.dxf");
