@@ -1,10 +1,11 @@
 #!/usr/bin/env pypy
 import cPickle as pickle
 import os
+import Image
 from snowflake import *
 
 class ExampleTable(object):
-    def __init__(self, pics_per_row=3):
+    def __init__(self, pics_per_row=15):
         self.ppr = pics_per_row
         self.table = []
         self.row = []
@@ -17,11 +18,12 @@ class ExampleTable(object):
         env = sf.environment
         env_keys = env.keys()
         env_keys.sort()
-        caption = ["%s = %s" % (key, env[key]) for key in env_keys]
-        caption = str.join(', ', caption)
+	caption = "%s=%s %s=%s" % (env_keys[1], env[env_keys[1]],env_keys[2], env[env_keys[2]])      
+	#caption = ["%s = %s" % (key, env[key]) for key in env_keys]
+        #caption = str.join('\n', caption)
         content = ''
-        content += "<h1>%s</h1>\n" % name
-        content += "<img src='%s.bmp' width = '200'/>\n" % name
+        #content += "%s\n" % name
+        content += "<img src='%s.bmp' style='height:300px; top:-100px'/>\n" % name
         content += "<p />%s\n" % caption
         self.add_cell(content)
 
