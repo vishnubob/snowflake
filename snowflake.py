@@ -5,6 +5,7 @@ import math
 import argparse
 import cPickle as pickle
 import logging
+import os
 
 import Image
 import ImageDraw
@@ -38,6 +39,10 @@ class CrystalEnvironment(dict):
 
     def __setstate__(self, state):
         self.update(state)
+
+    def randomize(self):
+        for key in self:
+            self[key] += (random.choice([1, -1]) * (random.random() / 1000))
 
     def _init_defaults(self):
         # (3a) 
@@ -74,9 +79,8 @@ class CrystalEnvironment(dict):
         self["gamma"] = 0.5
 
 class CrystalLattice(object):
-    def __init__(self, radius, angle=120, environment=None, celltype=None):
-        self.radius = radius
-        self.angle = angle
+    def __init__(self, size, environment=None, celltype=None):
+        self.size = size
         if environment == None:
             environment = CrystalEnvironment()
         self.environment = environment
@@ -85,6 +89,15 @@ class CrystalLattice(object):
         self.celltype = celltype
         self.iteration = 1
         self._init_cells()
+
+    def __setstate__(self, state):
+        # 0.1->0.2 format changes
+        if "radius" in state:
+            state["size"] = state["radius"]
+            del state["radius"]
+        if "angle" in state:
+            del state["angle"]
+        self.__dict__.update(state)
 
     def save_lattice(self, fn):
         msg = "Saving %s..." % fn
@@ -115,35 +128,29 @@ class CrystalLattice(object):
             cell.reality_check()
 
     def _init_cells(self):
-        self.cells = [None] * (self.radius * self.radius)
-        for x in range(self.radius):
-            for y in range(self.radius):
+        self.cells = [None] * (self.size * self.size)
+        for x in range(self.size):
+            for y in range(self.size):
                 xy = (x, y)
-                #if self._cell_clipped(xy):
-                #    continue
                 cell = self.celltype(xy, self)
                 idx = self._cell_index(xy)
                 self.cells[idx] = cell
         self.reality_check()
-        center_pt = self._cell_index((self.radius / 2, self.radius / 2))
+        center_pt = self._cell_index((self.size / 2, self.size / 2))
         self.cells[center_pt].attach(1)
 
     def _xy_ok(self, xy):
         (x, y) = xy
-        return (x >= 0 and x < self.radius and y >= 0 and y < self.radius)
+        return (x >= 0 and x < self.size and y >= 0 and y < self.size)
 
     def _cell_index(self, xy):
         (x, y) = xy
-        return y * self.radius + x
+        return y * self.size + x
 
     def _cell_xy(self, idx):
-        y = idx / self.radius
-        x = idx % self.radius
+        y = idx / self.size
+        x = idx % self.size
         return (x, y)
-
-    def _cell_clipped(self, xy):
-        (angle, distance) = xy_to_polar(xy)
-        return (angle < 0 or angle > self.angle or distance > self.radius)
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -170,7 +177,7 @@ class CrystalLattice(object):
         self.iteration += 1
 
     def headroom(self):
-        margin = self.radius * .98
+        margin = self.size * .98
         for cell in self.cells:
             if cell == None:
                 continue
@@ -184,40 +191,6 @@ class CrystalLattice(object):
                 return False
         return True
 
-    def blur(self, radius=2):
-        msg = "Bluring..."
-        log(msg)
-        blurbuf = [0.0] * (self.radius * self.radius)
-        for x in range(self.radius):
-            for y in range(self.radius):
-                xy = (x, y)
-                idx = self._cell_index(xy)
-                cell = self.cells[idx]
-                if not cell.attached:
-                    continue
-                cnt = total = 0
-                for ky in range(-radius, radius):
-                    for kx in range(-radius, radius):
-                        kx += x
-                        ky += y
-                        if not self._xy_ok((kx, ky)):
-                            continue
-                        kidx = self._cell_index((kx, ky))
-                        kcell = self.cells[kidx]
-                        if not kcell.attached:
-                            continue
-                        total += kcell.crystal_mass
-                        cnt += 1
-                if cnt:
-                    adj = total / cnt
-                    print xy, cell.crystal_mass, adj
-                    blurbuf[idx] = adj
-
-        for (idx, cell) in enumerate(self.cells):
-            if not cell.attached:
-                continue
-            cell.crystal_mass = blurbuf[idx]
-
     def grow(self):
         while True:
             self.step()
@@ -226,26 +199,34 @@ class CrystalLattice(object):
                 if not self.headroom():
                     break
 
-    def save_image(self, fn):
+    def save_image(self, fn, bw=False):
+        if bw:
+            parts = fn.split(".")
+            parts[0] += "_bw"
+            fn = str.join(".", parts)
         msg = "Saving %s..." % fn
         log(msg)
-        img = Image.new("RGB", (self.radius, self.radius))
+        img = Image.new("RGB", (self.size, self.size))
         for (idx, cell) in enumerate(self.cells):
             if cell == None:
                 continue
             xy = self._cell_xy(idx)
             color = (0, 0, 0)
             if cell.attached:
-                color = 200 * cell.crystal_mass
-                color = min(255, int(color))
-                color = (color, color, color)
-            else:
+                if bw:
+                    color = 0xff
+                    color = (color, color, color)
+                else:
+                    color = 200 * cell.crystal_mass
+                    color = min(255, int(color))
+                    color = (color, color, color)
+            elif not bw:
                 color = 200 * cell.diffusive_mass
                 color = min(255, int(color))
                 color = (color, color, color)
             img.putpixel(xy, color)
         img = img.rotate(45)
-        img = img.resize((int(self.radius * (1 / math.sqrt(3))), int(self.radius)))
+        img = img.resize((int(self.size * (1 / math.sqrt(3))), int(self.size)))
         img.save(fn)
 
 class SnowflakeCell(object):
@@ -362,44 +343,86 @@ class SnowflakeCell(object):
             self.diffusive_mass = (1 + self.env.sigma) * self.diffusive_mass
 
 DEFAULTS = {
-    "radius": 200,
+    "size": 200,
     "name": "snowflake",
     "load": False,
+    "bw": False,
     "env": '',
+    "pipeline_3d": False,
+    "randomize": False,
 }
 
 def get_cli():
     parser = argparse.ArgumentParser(description='Snowflake Generator.')
-    parser.add_argument('-s', '--size', dest="radius", type=int, help="The size of the snowflake.")
+    parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
     parser.add_argument('-n', '--name', dest="name",  help="The name of the snowflake.")
     parser.add_argument('-l', '--load', dest='load', action='store_true', help='Load the pickle file.')
     parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
+    parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
+    parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
+    parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
     return args
 
+# 3d pipeline
+def pipeline_3d(args):
+    cmd = "potrace -i -b eps -o %s.eps %s_bw.bmp" % (args.name, args.name)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+    #
+    cmd = "pstoedit -dt -f dxf:-polyaslines %s.eps %s.dxf" % (args.name, args.name)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+    #
+    scad_fn = "%s.scad" % args.name
+    f = open(scad_fn, 'w')
+    scad_txt = 'linear_extrude(height=.03, scale=200, layer="0") import("%s.dxf");\n' % args.name
+    f.write(scad_txt)
+    f.close()
+    cmd = "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD -o %s.stl %s" % (args.name, scad_fn)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+    #
+    cmd = "python /Applications/Cura/Cura.app/Contents/Resources/Cura/cura.py -s %s.stl -i snowflake.ini" % args.name
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+
 def run():
-    msg = "Snowflake Generator v0.1"
+    msg = "Snowflake Generator v0.2"
     log(msg)
     args = get_cli()
     pfn = "%s.pickle" % args.name
     ifn = "%s.bmp" % args.name
+    if args.pipeline_3d:
+        args.bw = True
     if args.load:
         cl = CrystalLattice.load_lattice(pfn)
-        cl.save_image(ifn)
+        cl.save_image(ifn, bw=args.bw)
     else:
         if args.env:
             mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
             env = CrystalEnvironment(mods)
-            cl = CrystalLattice(args.radius, environment=env)
+            cl = CrystalLattice(args.size, environment=env)
+        elif args.randomize:
+            env = CrystalEnvironment()
+            env.randomize()
+            print env
+            cl = CrystalLattice(args.size, environment=env)
         else:
-            cl = CrystalLattice(args.radius)
+            cl = CrystalLattice(args.size)
         try:
             cl.grow()
         finally:
-            cl.save_image(ifn)
+            cl.save_image(ifn, bw=args.bw)
             cl.save_lattice(pfn)
+    if args.pipeline_3d:
+        pipeline_3d(args)
 
 if __name__ == "__main__":
     run()
