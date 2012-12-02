@@ -16,7 +16,7 @@ def add_example(name):
     caption = str.join(', ', caption)
     ret += "<div style='border: 2px'>\n"
     ret += "<h1>%s</h1>\n" % name
-    ret += "<img src='%s.bmp' />\n" % name
+    ret += "<img src='%s.bmp' width = '200'/>\n" % name
     ret += "<p />%s\n" % caption
     ret += "</div>\n"
     return ret
