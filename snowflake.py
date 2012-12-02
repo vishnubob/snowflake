@@ -42,7 +42,7 @@ class CrystalEnvironment(dict):
 
     def randomize(self):
         for key in self:
-            self[key] += (random.choice([1, -1]) * (random.random() / 1000))
+            self[key] += (random.choice([1, -1]) * (random.random() / random.randint(10, 1000)))
 
     def _init_defaults(self):
         # (3a) 
@@ -79,7 +79,7 @@ class CrystalEnvironment(dict):
         self["gamma"] = 0.5
 
 class CrystalLattice(object):
-    def __init__(self, size, environment=None, celltype=None):
+    def __init__(self, size, environment=None, celltype=None, max_steps=0):
         self.size = size
         if environment == None:
             environment = CrystalEnvironment()
@@ -88,6 +88,7 @@ class CrystalLattice(object):
             celltype = SnowflakeCell
         self.celltype = celltype
         self.iteration = 1
+        self.max_steps = max_steps
         self._init_cells()
 
     def __setstate__(self, state):
@@ -177,6 +178,8 @@ class CrystalLattice(object):
         self.iteration += 1
 
     def headroom(self):
+        if self.max_steps and self.iteration >= self.max_steps:
+            return False
         margin = self.size * .98
         for cell in self.cells:
             if cell == None:
@@ -350,6 +353,7 @@ DEFAULTS = {
     "env": '',
     "pipeline_3d": False,
     "randomize": False,
+    "max_steps": 0,
 }
 
 def get_cli():
@@ -361,6 +365,7 @@ def get_cli():
     parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
     parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
     parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
+    parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
@@ -405,17 +410,19 @@ def run():
         cl = CrystalLattice.load_lattice(pfn)
         cl.save_image(ifn, bw=args.bw)
     else:
+        kw = {}
         if args.env:
             mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
             env = CrystalEnvironment(mods)
-            cl = CrystalLattice(args.size, environment=env)
+            kw["environment"] = env
         elif args.randomize:
             env = CrystalEnvironment()
             env.randomize()
-            print env
-            cl = CrystalLattice(args.size, environment=env)
-        else:
-            cl = CrystalLattice(args.size)
+            msg = str.join(', ', ["%s=%.6f" % (key, env[key]) for key in env])
+            log(msg)
+            kw["environment"] = env
+        kw["max_steps"] = args.max_steps
+        cl = CrystalLattice(args.size, **kw)
         try:
             cl.grow()
         finally:
