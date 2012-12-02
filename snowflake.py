@@ -385,7 +385,7 @@ def pipeline_3d(args):
     #
     scad_fn = "%s.scad" % args.name
     f = open(scad_fn, 'w')
-    scad_txt = 'scale([30, 30, 30]) linear_extrude(height=.03, scale=400, layer="0") import("%s.dxf");\n' % args.name
+    scad_txt = 'scale([30, 30, 30]) linear_extrude(height=.25, layer="0") import("%s.dxf");\n' % args.name
     f.write(scad_txt)
     f.close()
     cmd = "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD -o %s.stl %s" % (args.name, scad_fn)
