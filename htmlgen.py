@@ -38,9 +38,9 @@ class ExampleTable(object):
         env = self.get(name)
         env_keys = env.keys()
         env_keys.sort()
-        caption = "%s=%s %s=%s" % (env_keys[1], env[env_keys[1]],env_keys[2], env[env_keys[2]])      
-        #caption = ["%s = %s" % (key, env[key]) for key in env_keys]
-        #caption = str.join('\n', caption)
+        #caption = "%s=%s %s=%s" % (env_keys[1], env[env_keys[1]],env_keys[2], env[env_keys[2]])      
+        caption = ["%s = %s" % (key, env[key]) for key in env_keys]
+        caption = str.join('\n', caption)
         content = ''
         content += "%s\n" % name
         content += "<div class='crop'>\n"

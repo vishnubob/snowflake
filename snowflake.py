@@ -6,12 +6,19 @@ import argparse
 import cPickle as pickle
 import logging
 import os
+import colorsys
+from xml.dom.minidom import parse
 
 import Image
 import ImageDraw
 
 logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
 log = logging.info
+
+def avg_stdev(data):
+    avg = sum(data) / float(len(data))
+    stdev = math.sqrt(sum((x - avg) ** 2 for x in data) / float(len(data)))
+    return (avg, stdev)
 
 def polar_to_xy(args):
     (angle, distance) = args
@@ -202,6 +209,38 @@ class CrystalLattice(object):
                 if not self.headroom():
                     break
 
+    def save_laser_image(self, fn, layer_cnt):
+        fm = [cell.crystal_mass for cell in self.cells if cell and cell.attached]
+        (fm_avg, fm_stdev) = avg_stdev(fm) 
+        print fm_avg, fm_stdev
+        fm_min = min(fm)
+        fm_max = max(fm)
+
+        layers = []
+        color = (255, 255, 255)
+        for layer in range(layer_cnt):
+            img = Image.new("RGB", (self.size, self.size))
+            layers.append(img)
+
+        for (idx, cell) in enumerate(self.cells):
+            if cell == None or not cell.attached:
+                continue
+            xy = self._cell_xy(idx)
+            idx = int((cell.crystal_mass - fm_avg) / fm_stdev) % layer_cnt
+            layer = layers[idx]
+            layer.putpixel(xy, color)
+
+        fns = []
+        for (idx, img) in enumerate(layers):
+            img = img.rotate(45)
+            img = img.resize((int(self.size * (1 / math.sqrt(3))), int(self.size)))
+            tmpfn = fn.split('.')[0] + ("_layer_%d." % (idx + 1)) + str.join('.', fn.split('.')[1:])
+            msg = "Saving LaserImage %s..." % tmpfn
+            log(msg)
+            img.save(tmpfn)
+            fns.append(tmpfn)
+        return fns
+
     def save_image(self, fn, bw=False):
         if bw:
             parts = fn.split(".")
@@ -352,6 +391,7 @@ DEFAULTS = {
     "bw": False,
     "env": '',
     "pipeline_3d": False,
+    "pipeline_lasercutter": False,
     "randomize": False,
     "max_steps": 0,
 }
@@ -365,15 +405,51 @@ def get_cli():
     parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
     parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
     parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
+    parser.add_argument('-c', '--cut', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
     parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
     return args
 
+
+def merge_svg(file_list, color_list, outfn):
+    first = None
+    for (svgfn, color) in zip(file_list, color_list):
+        svg = parse(svgfn)
+        for node in svg.getElementsByTagName("g"):
+            node.attributes["fill"].nodeValue = color
+            if first == None:
+                first = svg
+                break
+            import_nodes = svg.importNode(node, True)
+            first.childNodes[1].appendChild(import_nodes)
+    f = open(outfn, 'w')
+    f.write(first.toxml())
+
+# laser cutter pipeline
+def pipeline_lasercutter(args, cl):
+    lifn = "%s_laser.bmp" % args.name
+    llist = cl.save_laser_image(lifn, 2)
+    cl.save_image(lifn, bw=True)
+    bwfn = "%s_laser_bw.bmp" % args.name
+    llist.insert(0, bwfn)
+    colors = ["#ff0000", "#00ff00", "#0000ff"]
+    svgs = []
+    for fn in llist:
+        svgfn = str.join('.', fn.split('.')[:-1]) + ".svg"
+        svgfn = "%s_laser.svg" % svgfn
+        cmd = "potrace -i -b svg -o %s %s" % (svgfn, fn)
+        svgs.append(svgfn)
+        msg = "Running '%s'" % cmd
+        log(msg)
+        os.system(cmd)
+    outfn = "%s_laser_merged.svg" % args.name
+    merge_svg(svgs, colors, outfn)
+
 # 3d pipeline
 def pipeline_3d(args):
-    cmd = "potrace -i -b eps -o %s.eps %s_bw.bmp" % (args.name, args.name)
+    cmd = "potrace -M .1 --tight -i -b eps -o %s.eps %s_bw.bmp" % (args.name, args.name)
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
@@ -408,7 +484,7 @@ def run():
         args.bw = True
     if args.load:
         cl = CrystalLattice.load_lattice(pfn)
-        cl.save_image(ifn, bw=args.bw)
+        #cl.save_image(ifn, bw=args.bw)
     else:
         kw = {}
         if args.env:
@@ -430,6 +506,8 @@ def run():
             cl.save_lattice(pfn)
     if args.pipeline_3d:
         pipeline_3d(args)
+    if args.pipeline_lasercutter:
+        pipeline_lasercutter(args, cl)
 
 if __name__ == "__main__":
     run()
