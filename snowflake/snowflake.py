@@ -36,7 +36,6 @@ def xy_to_polar(args):
 class CrystalEnvironment(dict):
     def __init__(self, *args, **kw):
         self._init_defaults()
-	self._init_special()
         self.update(*args, **kw)
 
     def __getattr__(self, name):
@@ -90,52 +89,36 @@ class CrystalEnvironment(dict):
 		pass
 
 class SpikeEndFlake(CrystalEnvironment):
-	def __init__(self):
-		CrystalEnvironment.__init__(self)
-		self._init_special()
-		
-	def _init_special(self):
-		self["beta"] = 0.8
-		self["gamma"] = 0.34
-		self["mu"] = 0.09
+    def __init__(self):
+        super(SpikeEndFlake, self).__init__()
+        self["beta"] = 0.8
+        self["gamma"] = 0.34
+        self["mu"] = 0.09
 
 class FernFlake(CrystalEnvironment):
-	def __init__(self):
-		CrystalEnvironment.__init__(self)
-		self._init_special()
-
-	def _init_special(self):
-		self["beta"] = 0.8
-		self["gamma"] = 0.52
-		self["mu"] = 0.09
+    def __init__(self):
+        super(FernFlake, self).__init__()
+        self["beta"] = 0.8
+        self["gamma"] = 0.52
+        self["mu"] = 0.09
 
 class ClassicFlake(CrystalEnvironment):
-	def __init__(self):
-		CrystalEnvironment.__init__(self)
-		self._init_special()
-
-	def _init_special(self):
-		self["beta"] = 0.9
-		self["gamma"] = 0.58
+    def __init__(self):
+        super(ClassicFlake, self).__init__()
+        self["beta"] = 0.9
+        self["gamma"] = 0.58
 
 class DelicateFlake(CrystalEnvironment):
-	def __init__(self):
-		CrystalEnvironment.__init__(self)
-		self._init_special()
-
-	def _init_special(self):
-		self["beta"] = 0.95
-		self["gamma"] = 0.3
+    def __init__(self):
+        super(DelicateFlake, self).__init__()
+        self["beta"] = 0.95
+        self["gamma"] = 0.3
 
 class RandomBeautyFlake(CrystalEnvironment):
-	def __init__(self):
-		CrystalEnvironment.__init__(self)
-		self._init_special()
-
-	def _init_special(self):
-		self["beta"] = 1.30
-		self["gamma"] = 0.50
-
+    def __init__(self):
+        super(RandomBeautyFlake, self).__init__()
+        self["beta"] = 1.30
+        self["gamma"] = 0.50
 
 class CrystalLattice(object):
     def __init__(self, size, environment=None, celltype=None, max_steps=0):
