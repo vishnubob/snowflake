@@ -258,7 +258,6 @@ class CrystalLattice(object):
         assert margin > 0 and margin <= 1
         cutoff = int(round((self.size / 2.0) + self.size * margin / 2.0))
         dims = self.crop_snowflake(0)
-        print dims, cutoff
         for val in dims:
             if val > cutoff:
                 return False
@@ -360,6 +359,7 @@ class SnowflakeCell(object):
         self.boundary_mass = state[2]
         self.crystal_mass = state[3]
         self.attached = state[4]
+        # 0.2 -> 0.3
         try:
             self.age = state[5]
         except IndexError:
@@ -558,7 +558,7 @@ def pipeline_3d(args):
     os.system(cmd)
 
 def run(args):
-    msg = "Snowflake Generator v0.2"
+    msg = "Snowflake Generator v0.3"
     log(msg)
     pfn = "%s.pickle" % args.name
     ifn = "%s.bmp" % args.name
