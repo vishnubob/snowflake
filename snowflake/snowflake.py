@@ -52,6 +52,8 @@ class CrystalEnvironment(dict):
 
     def randomize(self):
         for key in self:
+            if key == "sigma":
+                continue
             self[key] += (random.choice([1, -1]) * (random.random() / random.randint(10, 1000)))
 
     def _init_defaults(self):

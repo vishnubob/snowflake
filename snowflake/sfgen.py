@@ -9,5 +9,4 @@ while 1:
     fn = "snowflake_%s" % _id
     cmd = CMD % fn
     os.system(cmd)
-    cnt += 1
     time.sleep(1)
