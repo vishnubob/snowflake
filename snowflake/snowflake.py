@@ -6,6 +6,7 @@ import argparse
 import cPickle as pickle
 import logging
 import os
+import sys
 import colorsys
 from xml.dom.minidom import parse
 
@@ -14,6 +15,8 @@ import ImageDraw
 
 logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
 log = logging.info
+
+X_SCALE_FACTOR = (1.0 / math.sqrt(3))
 
 def avg_stdev(data):
     avg = sum(data) / float(len(data))
@@ -121,7 +124,7 @@ class RandomBeautyFlake(CrystalEnvironment):
         self["gamma"] = 0.50
 
 class CrystalLattice(object):
-    def __init__(self, size, environment=None, celltype=None, max_steps=0):
+    def __init__(self, size, environment=None, celltype=None, max_steps=0, margin=None):
         self.size = size
         if environment == None:
             environment = CrystalEnvironment()
@@ -130,6 +133,8 @@ class CrystalLattice(object):
             celltype = SnowflakeCell
         self.celltype = celltype
         self.iteration = 1
+        assert margin > 0 and margin <= 1.0
+        self.margin = margin
         self.max_steps = max_steps
         self._init_cells()
 
@@ -219,20 +224,43 @@ class CrystalLattice(object):
             cell.step_three()
         self.iteration += 1
 
-    def headroom(self):
+    def translate_xy(self, xy):
+        (x, y) = xy
+        x = int(round(x * X_SCALE_FACTOR))
+        return (x, y)
+
+    def crop_snowflake(self, margin=10):
+        max_x, max_y = (0, 0)
+        min_x, min_y = (self.size, self.size)
+        for cell in self.cells:
+            if cell == None or not cell.attached:
+                continue
+            (cell_x, cell_y) = cell.xy
+            min_x = min(cell_x, min_x)
+            min_y = min(cell_y, min_y)
+            max_x = max(cell_x, max_x)
+            max_y = max(cell_y, max_y)
+        if margin:
+            margin_x = int(round(margin + (margin * X_SCALE_FACTOR))) * 2
+            max_x = min(self.size - 1, max_x + margin_x)
+            max_y = min(self.size - 1, max_y + margin)
+            min_x = max(0, min_x - margin_x)
+            min_y = max(0, min_y - margin)
+            ((min_x, min_y)) = self.translate_xy((min_x, min_y))
+            ((max_x, max_y)) = self.translate_xy((max_x, max_y))
+        return (min_x, min_y, max_x, max_y)
+
+    def headroom(self, margin=None):
         if self.max_steps and self.iteration >= self.max_steps:
             return False
-        margin = self.size * .98
-        for cell in self.cells:
-            if cell == None:
-                continue
-            if not cell.attached:
-                continue
-            # get angle
-            (angle, distance) = xy_to_polar(cell.xy)
-            (margin_x, margin_y) = polar_to_xy((angle, margin))
-            (cell_x, cell_y) = cell.xy
-            if (cell_x > margin_x) and (cell_y > margin_y):
+        if margin == None:
+            margin = self.margin
+        assert margin > 0 and margin <= 1
+        cutoff = int(round((self.size / 2.0) + self.size * margin / 2.0))
+        dims = self.crop_snowflake(0)
+        print dims, cutoff
+        for val in dims:
+            if val > cutoff:
                 return False
         return True
 
@@ -268,7 +296,7 @@ class CrystalLattice(object):
         fns = []
         for (idx, img) in enumerate(layers):
             img = img.rotate(45)
-            img = img.resize((int(self.size * (1 / math.sqrt(3))), int(self.size)))
+            img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
             tmpfn = fn.split('.')[0] + ("_layer_%d." % (idx + 1)) + str.join('.', fn.split('.')[1:])
             msg = "Saving LaserImage %s..." % tmpfn
             log(msg)
@@ -301,9 +329,14 @@ class CrystalLattice(object):
                 color = 200 * cell.diffusive_mass
                 color = min(255, int(color))
                 color = (color, color, color)
+            #color = tuple([int(round(x * 0xff)) for x in colorsys.hsv_to_rgb(cell.age / float(self.iteration), 1, 1)])
             img.putpixel(xy, color)
         img = img.rotate(45)
-        img = img.resize((int(self.size * (1 / math.sqrt(3))), int(self.size)))
+        img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
+        box = self.crop_snowflake()
+        img = img.crop(box)
+        y_sz = int(round((self.size / float(img.size[0])) * img.size[1]))
+        img = img.resize((self.size, y_sz))
         img.save(fn)
 
 class SnowflakeCell(object):
@@ -315,10 +348,11 @@ class SnowflakeCell(object):
         self.boundary_mass = 0.0
         self.crystal_mass = 0.0
         self.attached = False
+        self.age = 0
         self.__neighbors = None
 
     def __getstate__(self):
-        return (self.xy, self.diffusive_mass, self.boundary_mass, self.crystal_mass, self.attached)
+        return (self.xy, self.diffusive_mass, self.boundary_mass, self.crystal_mass, self.attached, self.age)
 
     def __setstate__(self, state):
         self.xy = state[0]
@@ -326,6 +360,10 @@ class SnowflakeCell(object):
         self.boundary_mass = state[2]
         self.crystal_mass = state[3]
         self.attached = state[4]
+        try:
+            self.age = state[5]
+        except IndexError:
+            self.age = 0
         self.__neighbors = None
         self.lattice = None
         self.env = None
@@ -352,8 +390,26 @@ class SnowflakeCell(object):
     def boundary(self):
         return (not self.attached) and any([cell.attached for cell in self.neighbors])
 
+    def step_one(self):
+        self._next_dm = self.diffusion_calc()
+
+    def step_two(self):
+        self.diffusive_mass = self._next_dm
+        self.attachment_flag = self.attached
+        self.freezing_step()
+        self.attachment_flag = self.attachment_step()
+        self.melting_step()
+
+    def step_three(self):
+        if self.boundary and self.attachment_flag:
+            self.attach()
+        self.noise_step()
+
     def diffusion_calc(self):
         next_dm = self.diffusive_mass
+        if self.attached:
+            return next_dm
+        self.age += 1
         for cell in self.neighbors:
             if cell.attached:
                 next_dm += self.diffusive_mass
@@ -366,31 +422,16 @@ class SnowflakeCell(object):
         self.boundary_mass = 0
         self.attached = True
 
-    def step_one(self):
-        self._next_dm = 0
-        if not self.attached:
-            self._next_dm = self.diffusion_calc()
-
-    def step_two(self):
-        self.diffusive_mass = self._next_dm
-        self.attachment_flag = self.attached
-        if self.boundary:
-            self.freezing_step()
-            self.attachment_flag = self.attachment_step()
-            self.melting_step()
-
-    def step_three(self):
-        if self.boundary and self.attachment_flag:
-            self.attach()
-
     def freezing_step(self):
-        assert self.boundary
+        if not self.boundary:
+            return
         self.boundary_mass += (1 - self.env.kappa) * self.diffusive_mass
         self.crystal_mass += (self.env.kappa * self.diffusive_mass)
         self.diffusive_mass = 0
 
     def attachment_step(self):
-        assert self.boundary
+        if not self.boundary:
+            return False
         if len(self.attached_neighbors) <= 2:
             if self.boundary_mass > self.env.beta:
                 return True
@@ -408,12 +449,15 @@ class SnowflakeCell(object):
         return False
     
     def melting_step(self):
-        assert self.boundary
+        if not self.boundary:
+            return
         self.diffusive_mass += self.env.mu * self.boundary_mass + self.env.upsilon * self.crystal_mass
         self.boundary_mass = (1 - self.env.mu) * self.boundary_mass
         self.crystal_mass = (1 - self.env.upsilon) * self.crystal_mass
 
     def noise_step(self):
+        if (self.boundary or self.attached):
+            return
         if random.choice([True, False]):
             self.diffusive_mass = (1 - self.env.sigma) * self.diffusive_mass
         else:
@@ -429,12 +473,13 @@ DEFAULTS = {
     "pipeline_lasercutter": False,
     "randomize": False,
     "max_steps": 0,
+    "margin": .42,
 }
 
 def get_cli():
     parser = argparse.ArgumentParser(description='Snowflake Generator.')
+    parser.add_argument(dest="name", nargs=1, help="The name of the snowflake.")
     parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
-    parser.add_argument('-n', '--name', dest="name",  help="The name of the snowflake.")
     parser.add_argument('-l', '--load', dest='load', action='store_true', help='Load the pickle file.')
     parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
     parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
@@ -442,11 +487,14 @@ def get_cli():
     parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
     parser.add_argument('-c', '--cut', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
     parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
+    parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
+    args.name = args.name[0]
+    if not os.path.exists(args.name):
+        os.mkdir(args.name)
     return args
-
 
 def merge_svg(file_list, color_list, outfn):
     first = None
@@ -509,18 +557,20 @@ def pipeline_3d(args):
     log(msg)
     os.system(cmd)
 
-def run():
+def run(args):
     msg = "Snowflake Generator v0.2"
     log(msg)
-    args = get_cli()
     pfn = "%s.pickle" % args.name
     ifn = "%s.bmp" % args.name
     if args.pipeline_3d:
         args.bw = True
     if args.load:
         cl = CrystalLattice.load_lattice(pfn)
-        #cl.save_image(ifn, bw=args.bw)
+        cl.save_image(ifn, bw=args.bw)
     else:
+        if os.path.exists(pfn):
+            print "Error: refusing to trample '%s'" % pfn
+            sys.exit(-1)
         kw = {}
         if args.env:
             mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
@@ -533,16 +583,22 @@ def run():
             log(msg)
             kw["environment"] = env
         kw["max_steps"] = args.max_steps
+        kw["margin"] = args.margin
         cl = CrystalLattice(args.size, **kw)
         try:
             cl.grow()
         finally:
-            cl.save_image(ifn, bw=args.bw)
             cl.save_lattice(pfn)
+            cl.save_image(ifn, bw=args.bw)
     if args.pipeline_3d:
         pipeline_3d(args)
     if args.pipeline_lasercutter:
         pipeline_lasercutter(args, cl)
 
 if __name__ == "__main__":
-    run()
+    args = get_cli()
+    os.chdir(args.name)
+    try:
+        run(args)
+    finally:
+        os.chdir('..')
