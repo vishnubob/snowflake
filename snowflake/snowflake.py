@@ -7,11 +7,15 @@ import cPickle as pickle
 import logging
 import os
 import sys
+import re
 import colorsys
 from xml.dom.minidom import parse
 
 import Image
 import ImageDraw
+
+# local
+from curves import NameCurve
 
 logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
 log = logging.info
@@ -22,19 +26,6 @@ def avg_stdev(data):
     avg = sum(data) / float(len(data))
     stdev = math.sqrt(sum((x - avg) ** 2 for x in data) / float(len(data)))
     return (avg, stdev)
-
-def polar_to_xy(args):
-    (angle, distance) = args
-    angle = math.radians(angle)
-    y = int(round(math.sin(angle) * distance))
-    x = int(round(math.cos(angle) * distance))
-    return (x, y)
-
-def xy_to_polar(args):
-    (x, y) = args
-    angle = math.degrees(math.atan2(y, x))
-    distance = math.hypot(x, y)
-    return (angle, distance)
 
 class CrystalEnvironment(dict):
     def __init__(self, *args, **kw):
@@ -84,11 +75,16 @@ class CrystalEnvironment(dict):
 
         # (5)
         # "The diffusive mass at each site undergoes an independent random perturbation of proportion sigma"
-        self["sigma"] = 0.00001
-        #self["sigma"] = 0
+        self["sigma"] = 0.000001
 
         # initial diffusion
         self["gamma"] = 0.5
+
+        # temperature 
+        self["omega"] = -41.0
+
+        # humidity offset
+        self["psi"] = 0.0
 	
 	def _init_special(self):
 		pass
@@ -126,7 +122,7 @@ class RandomBeautyFlake(CrystalEnvironment):
         self["gamma"] = 0.50
 
 class CrystalLattice(object):
-    def __init__(self, size, environment=None, celltype=None, max_steps=0, margin=None):
+    def __init__(self, size, environment=None, celltype=None, max_steps=0, margin=None, curves=None):
         self.size = size
         if environment == None:
             environment = CrystalEnvironment()
@@ -137,6 +133,7 @@ class CrystalLattice(object):
         self.iteration = 1
         assert margin > 0 and margin <= 1.0
         self.margin = margin
+        self.curves = curves
         self.max_steps = max_steps
         self._init_cells()
 
@@ -202,6 +199,26 @@ class CrystalLattice(object):
         x = idx % self.size
         return (x, y)
 
+    def adjust_humidity(self, val):
+        val *= .0001
+        self.environment.psi = val
+        for cell in self.cells:
+            if cell.attached or cell.boundary:
+                continue
+            cell.diffusive_mass += val
+    
+    def adjust_temperature(self, val):
+        val *= 100000
+        delta = self.environment.omega - val
+        self.environment.beta += .1 / delta
+        self.environment.theta += .01 / delta
+        self.environment.alpha += .05 / delta
+        self.environment.kappa += .001 / delta
+        self.environment.mu += .005 / delta
+        self.environment.upsilon += .00005 / delta
+        self.environment.sigma += .000001 / delta
+        self.environment.omega = val
+
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
         cm = sum([cell.crystal_mass for cell in self.cells if cell])
@@ -224,33 +241,58 @@ class CrystalLattice(object):
             if cell == None or cell.attached:
                 continue
             cell.step_three()
+        # run curves
         self.iteration += 1
+        if self.curves:
+            self.adjust_temperature(self.curves.get_temperature(self.iteration))
+            self.adjust_humidity(self.curves.get_humidity(self.iteration))
 
     def translate_xy(self, xy):
         (x, y) = xy
         x = int(round(x * X_SCALE_FACTOR))
         return (x, y)
 
-    def crop_snowflake(self, margin=10):
-        max_x, max_y = (0, 0)
-        min_x, min_y = (self.size, self.size)
-        for cell in self.cells:
-            if cell == None or not cell.attached:
+    def polar_to_xy(self, args):
+        (angle, distance) = args
+        half = self.size / 2.0
+        angle = math.radians(angle)
+        y = int(round(half - (math.sin(angle) * distance)))
+        x = int(round(half + (math.cos(angle) * distance)))
+        return (x, y)
+
+    def xy_to_polar(self, args):
+        (x, y) = args
+        half = self.size / 2.0
+        x -= half
+        y += half
+        angle = math.degrees(math.atan2(y, x))
+        distance = math.hypot(x, y)
+        return (angle, distance)
+
+    def snowflake_radius(self, angle=135):
+        # we cast a ray on the 135 degeree axis
+        radius = 0
+        half = self.size / 2.0
+        while radius < half:
+            radius += 1
+            xy = self.polar_to_xy((angle, radius))
+            cell = self.cells[self._cell_index(xy)]
+            if cell.attached or cell.boundary:
                 continue
-            (cell_x, cell_y) = cell.xy
-            min_x = min(cell_x, min_x)
-            min_y = min(cell_y, min_y)
-            max_x = max(cell_x, max_x)
-            max_y = max(cell_y, max_y)
-        if margin:
-            margin_x = int(round(margin + (margin * X_SCALE_FACTOR))) * 2
-            max_x = min(self.size - 1, max_x + margin_x)
-            max_y = min(self.size - 1, max_y + margin)
-            min_x = max(0, min_x - margin_x)
-            min_y = max(0, min_y - margin)
-            ((min_x, min_y)) = self.translate_xy((min_x, min_y))
-            ((max_x, max_y)) = self.translate_xy((max_x, max_y))
-        return (min_x, min_y, max_x, max_y)
+            return radius
+        # uhh
+        return int(round(half))
+
+    def crop_snowflake(self, margin=15):
+        def scale(val):
+            return int(round(X_SCALE_FACTOR * val))
+        half = self.size / 2
+        radius = scale(self.snowflake_radius())
+        distance = min(radius + margin, half)
+        half_s = scale(half)
+        distance_s = scale(distance)
+        box = (half_s - distance, half - distance, half_s + distance, half + distance)
+        return box
 
     def headroom(self, margin=None):
         if self.max_steps and self.iteration >= self.max_steps:
@@ -258,17 +300,16 @@ class CrystalLattice(object):
         if margin == None:
             margin = self.margin
         assert margin > 0 and margin <= 1
-        cutoff = int(round((self.size / 2.0) + self.size * margin / 2.0))
-        dims = self.crop_snowflake(0)
-        for val in dims:
-            if val > cutoff:
-                return False
+        cutoff = int(round(margin * (self.size / 2.0)))
+        radius = self.snowflake_radius()
+        if radius > cutoff:
+            return False
         return True
 
     def grow(self):
         while True:
             self.step()
-            if self.iteration % 100 == 0:
+            if self.iteration % 50 == 0:
                 self.print_status()
                 if not self.headroom():
                     break
@@ -334,8 +375,7 @@ class CrystalLattice(object):
             img.putpixel(xy, color)
         img = img.rotate(45)
         img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
-        box = self.crop_snowflake()
-        img = img.crop(box)
+        img = img.crop(self.crop_snowflake())
         y_sz = int(round((self.size / float(img.size[0])) * img.size[1]))
         img = img.resize((self.size, y_sz))
         img.save(fn)
@@ -476,11 +516,12 @@ DEFAULTS = {
     "randomize": False,
     "max_steps": 0,
     "margin": .42,
+    "curves": False,
 }
 
 def get_cli():
     parser = argparse.ArgumentParser(description='Snowflake Generator.')
-    parser.add_argument(dest="name", nargs=1, help="The name of the snowflake.")
+    parser.add_argument(dest="name", nargs='+', help="The name of the snowflake.")
     parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
     parser.add_argument('-l', '--load', dest='load', action='store_true', help='Load the pickle file.')
     parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
@@ -490,10 +531,11 @@ def get_cli():
     parser.add_argument('-c', '--cut', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
     parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
     parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
+    parser.add_argument('-C', '--curves', dest='curves', action='store_true', help='run name as curves')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
-    args.name = args.name[0]
+    args.name = str.join('', map(str.lower, args.name))
     if not os.path.exists(args.name):
         os.mkdir(args.name)
     return args
@@ -584,6 +626,10 @@ def run(args):
             msg = str.join(', ', ["%s=%.6f" % (key, env[key]) for key in env])
             log(msg)
             kw["environment"] = env
+        if args.curves:
+            curves = NameCurve(args.name)
+            curves.run_graph()
+            kw["curves"] = curves
         kw["max_steps"] = args.max_steps
         kw["margin"] = args.margin
         cl = CrystalLattice(args.size, **kw)
