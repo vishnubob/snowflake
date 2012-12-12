@@ -1,4 +1,8 @@
-This is a snowflake simulator written in python by Rachael Holmes and Giles Hall.  It builds realistic looking snowflakes by modeling the phase transistions between water molecules at a mesoscopic scale.  The model is lifted (verbatim) from "MODELING SNOW CRYSTAL GROWTH II: A mesoscopic lattice map with plausible dynamics" by Janko Gravner and David Griffeath.
+This is a snowflake simulator written in python by Rachael Holmes and Giles
+Hall.  It builds realistic looking snowflakes by modeling the phase
+transistions between water molecules at a mesoscopic scale.  The model is
+lifted (verbatim) from "MODELING SNOW CRYSTAL GROWTH II: A mesoscopic lattice
+map with plausible dynamics" by Janko Gravner and David Griffeath.
 
 Requirements:
     - PyPy (for fast execution of the simulations)
@@ -15,4 +19,4 @@ Requirements for 3D Printing:
     - PIL (PyPy/Python accessible)
     - potrace (For translating SVG)
 
-![Example Snowflake](http://i.imgur.com/GOJaV.png "Example Snowflake")
+![Example Snowflake](http://i.imgur.com/GOJaV.png)

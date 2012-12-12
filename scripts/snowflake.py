@@ -15,7 +15,8 @@ import Image
 import ImageDraw
 
 # local
-from curves import NameCurve
+from sfgen import NameCurve
+
 
 def ensure_python():
     # pylab doesn't play well with pypy
@@ -27,7 +28,7 @@ def ensure_python():
         args = ["python", "python"] + sys.argv
         os.execlp("/usr/bin/env", *args)
 
-logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
+logging.basicConfig(format="%(asctime)s (%(process)d): %(message)s", level=logging.DEBUG, datefmt='%d/%m/%y %H:%M:%S')
 log = logging.info
 
 X_SCALE_FACTOR = (1.0 / math.sqrt(3))
@@ -85,19 +86,16 @@ class CrystalEnvironment(dict):
 
         # (5)
         # "The diffusive mass at each site undergoes an independent random perturbation of proportion sigma"
-        self["sigma"] = 0.000001
+        self["sigma"] = 0.00001
 
         # initial diffusion
         self["gamma"] = 0.5
 
-        # temperature 
-        self["omega"] = -41.0
-
-        # humidity offset
-        self["psi"] = 0.0
-	
 	def _init_special(self):
 		pass
+
+class DefaultFlake(CrystalEnvironment):
+    pass
 
 class SpikeEndFlake(CrystalEnvironment):
     def __init__(self):
@@ -159,14 +157,14 @@ class CrystalLattice(object):
     def save_lattice(self, fn):
         msg = "Saving %s..." % fn
         log(msg)
-        f = open(fn, 'w')
+        f = open(fn, 'wb')
         pickle.dump(self, f)
 
     @classmethod
     def load_lattice(cls, fn):
         msg = "Loading %s..." % fn
         log(msg)
-        f = open(fn)
+        f = open(fn, 'rb')
         obj = pickle.load(f)
         for cell in obj.cells:
             cell.lattice = obj
@@ -210,24 +208,19 @@ class CrystalLattice(object):
         return (x, y)
 
     def adjust_humidity(self, val):
-        val *= .0001
-        self.environment.psi = val
         for cell in self.cells:
             if cell.attached or cell.boundary:
                 continue
-            cell.diffusive_mass += val
+            # we use the same coef as the noise coef
+            cell.diffusive_mass += val * self.environment.sigma
     
     def adjust_temperature(self, val):
-        val *= 100000
-        delta = self.environment.omega - val
-        self.environment.beta += .1 / delta
-        self.environment.theta += .01 / delta
-        self.environment.alpha += .05 / delta
-        self.environment.kappa += .001 / delta
-        self.environment.mu += .005 / delta
-        self.environment.upsilon += .00005 / delta
-        self.environment.sigma += .000001 / delta
-        self.environment.omega = val
+        self.environment.beta += .01 * val
+        self.environment.theta += .001 * val
+        self.environment.alpha += .005 * val
+        self.environment.kappa += .0001 * val
+        self.environment.mu += .0005 * val
+        self.environment.upsilon += .000005 * val
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -522,7 +515,6 @@ class SnowflakeCell(object):
 DEFAULTS = {
     "size": 200,
     "name": "snowflake",
-    "load": False,
     "bw": False,
     "env": '',
     "pipeline_3d": False,
@@ -537,12 +529,11 @@ def get_cli():
     parser = argparse.ArgumentParser(description='Snowflake Generator.')
     parser.add_argument(dest="name", nargs='+', help="The name of the snowflake.")
     parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
-    parser.add_argument('-l', '--load', dest='load', action='store_true', help='Load the pickle file.')
     parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
     parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
     parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
     parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
-    parser.add_argument('-c', '--cut', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
+    parser.add_argument('-l', '--laser', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
     parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
     parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
     parser.add_argument('-C', '--curves', dest='curves', action='store_true', help='run name as curves')
@@ -550,10 +541,15 @@ def get_cli():
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
     args.name = str.join('', map(str.lower, args.name))
+    if args.name[-1] == '/':
+        # wart from the shell
+        args.name = args.name[:-1]
     if not os.path.exists(args.name):
         os.mkdir(args.name)
     if args.pipeline_lasercutter:
         ensure_python()
+    if args.pipeline_3d:
+        args.bw = True
     return args
 
 def check_basecut(svgfn):
@@ -596,7 +592,7 @@ def potrace(svgfn, fn, turd=None):
     os.system(cmd)
 
 # laser cutter pipeline
-def pipeline_lasercutter(args, cl, turd=2000):
+def pipeline_lasercutter(args, cl, turd=10):
     lifn = "%s_laser.bmp" % args.name
     svgfn = "%s_laser_test.svg" % args.name
     bwfn = "%s_laser_bw.bmp" % args.name
@@ -608,7 +604,7 @@ def pipeline_lasercutter(args, cl, turd=2000):
         msg = "There are disconnected elements in the base cut, turning on boundary layer."
         log(msg)
         cl.save_image(lifn, bw=True, boundary=True)
-        potrace(svgfn, bwfn, turd=turd)
+        potrace(svgfn, bwfn, turd=2000)
         assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
     os.unlink(svgfn)
     llist.insert(0, bwfn)
@@ -652,20 +648,19 @@ def pipeline_3d(args):
     log(msg)
     os.system(cmd)
 
+def choose_environment(name):
+    ftypes = [cls for cls in globals().values() if type(cls) == type and issubclass(cls, CrystalEnvironment) and cls != CrystalEnvironment]
+    return ftypes[len(name) % len(ftypes)]
+
 def run(args):
     msg = "Snowflake Generator v0.3"
     log(msg)
     pfn = "%s.pickle" % args.name
-    ifn = "%s.bmp" % args.name
-    if args.pipeline_3d:
-        args.bw = True
-    if args.load:
+    ifn = "%s.png" % args.name
+    if os.path.exists(pfn):
         cl = CrystalLattice.load_lattice(pfn)
         cl.save_image(ifn, bw=args.bw)
     else:
-        if os.path.exists(pfn):
-            print "Error: refusing to trample '%s'" % pfn
-            sys.exit(-1)
         kw = {}
         if args.env:
             mods = {key: float(val) for (key, val) in [keyval.split('=') for keyval in args.env.split(',')]}
@@ -677,7 +672,12 @@ def run(args):
             msg = str.join(', ', ["%s=%.6f" % (key, env[key]) for key in env])
             log(msg)
             kw["environment"] = env
-        if args.curves:
+        elif args.curves:
+            # choose environment
+            env = choose_environment(args.name)
+            msg = "%s selected %s environment." % (args.name, env.__name__)
+            log(msg)
+            kw["environment"] = env()
             curves = NameCurve(args.name)
             curves.run_graph()
             kw["curves"] = curves
