@@ -15,4 +15,4 @@ Requirements for 3D Printing:
     - PIL (PyPy/Python accessible)
     - potrace (For translating SVG)
 
-![Example Snowflake](https://raw.github.com/vishnubob/snowflake/master/example.png)
+![Example Snowflake](http://i.imgur.com/GOJaV.png)
