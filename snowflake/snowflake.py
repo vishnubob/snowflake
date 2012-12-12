@@ -17,6 +17,16 @@ import ImageDraw
 # local
 from curves import NameCurve
 
+def ensure_python():
+    # pylab doesn't play well with pypy
+    # so this will cause us to re-exec if
+    # we are in pypy ... do not use if you want pypy
+    if sys.subversion[0] == "PyPy":
+        msg = "Restarting within CPython environment to accomdate scipy/numpy"
+        log(msg)
+        args = ["python", "python"] + sys.argv
+        os.execlp("/usr/bin/env", *args)
+
 logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.DEBUG)
 log = logging.info
 
@@ -225,7 +235,7 @@ class CrystalLattice(object):
         bm = sum([cell.boundary_mass for cell in self.cells if cell])
         acnt = len([cell for cell in self.cells if cell and cell.attached])
         bcnt = len([cell for cell in self.cells if cell and cell.boundary])
-        msg = "Step #%d, %d attached cells, %d boundary cells, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
+        msg = "Step #%d, %d attached, %d boundary, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
         log(msg)
 
     def step(self):
@@ -283,9 +293,11 @@ class CrystalLattice(object):
         # uhh
         return int(round(half))
 
-    def crop_snowflake(self, margin=15):
+    def crop_snowflake(self, margin=None):
         def scale(val):
             return int(round(X_SCALE_FACTOR * val))
+        if margin == None:
+            margin = 15
         half = self.size / 2
         radius = scale(self.snowflake_radius())
         distance = min(radius + margin, half)
@@ -315,30 +327,30 @@ class CrystalLattice(object):
                     break
 
     def save_laser_image(self, fn, layer_cnt):
-        fm = [cell.crystal_mass for cell in self.cells if cell and cell.attached]
-        (fm_avg, fm_stdev) = avg_stdev(fm) 
-        print fm_avg, fm_stdev
-        fm_min = min(fm)
-        fm_max = max(fm)
-
+        import scipy.cluster.vq
+        import numpy
+        acells = [cell for cell in self.cells if cell and cell.attached]
+        fm = [cell.crystal_mass for cell in acells]
+        clusters = scipy.cluster.vq.kmeans2(numpy.array(fm), layer_cnt)
+        cluster_map = clusters[1]
         layers = []
         color = (255, 255, 255)
         for layer in range(layer_cnt):
             img = Image.new("RGB", (self.size, self.size))
             layers.append(img)
 
-        for (idx, cell) in enumerate(self.cells):
-            if cell == None or not cell.attached:
-                continue
-            xy = self._cell_xy(idx)
-            idx = int((cell.crystal_mass - fm_avg) / fm_stdev) % layer_cnt
-            layer = layers[idx]
+        for (layer, cell) in zip(cluster_map, acells):
+            xy = cell.xy
+            layer = layers[layer]
             layer.putpixel(xy, color)
 
         fns = []
         for (idx, img) in enumerate(layers):
             img = img.rotate(45)
             img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
+            img = img.crop(self.crop_snowflake())
+            y_sz = int(round((self.size / float(img.size[0])) * img.size[1]))
+            img = img.resize((self.size, y_sz))
             tmpfn = fn.split('.')[0] + ("_layer_%d." % (idx + 1)) + str.join('.', fn.split('.')[1:])
             msg = "Saving LaserImage %s..." % tmpfn
             log(msg)
@@ -346,7 +358,7 @@ class CrystalLattice(object):
             fns.append(tmpfn)
         return fns
 
-    def save_image(self, fn, bw=False):
+    def save_image(self, fn, bw=False, boundary=False, margin=None):
         if bw:
             parts = fn.split(".")
             parts[0] += "_bw"
@@ -359,7 +371,7 @@ class CrystalLattice(object):
                 continue
             xy = self._cell_xy(idx)
             color = (0, 0, 0)
-            if cell.attached:
+            if boundary and cell.boundary or cell.attached:
                 if bw:
                     color = 0xff
                     color = (color, color, color)
@@ -375,9 +387,11 @@ class CrystalLattice(object):
             img.putpixel(xy, color)
         img = img.rotate(45)
         img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
-        img = img.crop(self.crop_snowflake())
+        img = img.crop(self.crop_snowflake(margin=margin))
         y_sz = int(round((self.size / float(img.size[0])) * img.size[1]))
+        assert y_sz == self.size, "This is critical for laser cutting."
         img = img.resize((self.size, y_sz))
+        # 
         img.save(fn)
 
 class SnowflakeCell(object):
@@ -538,14 +552,31 @@ def get_cli():
     args.name = str.join('', map(str.lower, args.name))
     if not os.path.exists(args.name):
         os.mkdir(args.name)
+    if args.pipeline_lasercutter:
+        ensure_python()
     return args
+
+def check_basecut(svgfn):
+    # ensure there is only one path
+    svg = parse(svgfn)
+    for (cnt, node) in enumerate(svg.getElementsByTagName("path")):
+        if cnt > 0:
+            return False
+    return True
 
 def merge_svg(file_list, color_list, outfn):
     first = None
+    idx = 0
     for (svgfn, color) in zip(file_list, color_list):
         svg = parse(svgfn)
         for node in svg.getElementsByTagName("g"):
-            node.attributes["fill"].nodeValue = color
+            if idx == 0:
+                node.attributes["fill"] = "None"
+                node.attributes["stroke"] = color
+                node.attributes["stroke-width"] = "10"
+            else:
+                node.attributes["fill"].nodeValue = color
+            idx += 1
             if first == None:
                 first = svg
                 break
@@ -554,23 +585,43 @@ def merge_svg(file_list, color_list, outfn):
     f = open(outfn, 'w')
     f.write(first.toxml())
 
-# laser cutter pipeline
-def pipeline_lasercutter(args, cl):
-    lifn = "%s_laser.bmp" % args.name
-    llist = cl.save_laser_image(lifn, 2)
-    cl.save_image(lifn, bw=True)
-    bwfn = "%s_laser_bw.bmp" % args.name
-    llist.insert(0, bwfn)
-    colors = ["#ff0000", "#00ff00", "#0000ff"]
-    svgs = []
-    for fn in llist:
-        svgfn = str.join('.', fn.split('.')[:-1]) + ".svg"
-        svgfn = "%s_laser.svg" % svgfn
+def potrace(svgfn, fn, turd=None):
+    if turd:
+        # "turd" supression, important for the cut layer
+        cmd = "potrace -i -b svg -t %s -o %s %s" % (turd, svgfn, fn)
+    else:
         cmd = "potrace -i -b svg -o %s %s" % (svgfn, fn)
-        svgs.append(svgfn)
-        msg = "Running '%s'" % cmd
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+
+# laser cutter pipeline
+def pipeline_lasercutter(args, cl, turd=2000):
+    lifn = "%s_laser.bmp" % args.name
+    svgfn = "%s_laser_test.svg" % args.name
+    bwfn = "%s_laser_bw.bmp" % args.name
+    llist = cl.save_laser_image(lifn, 3)
+    # try to save o'natural
+    cl.save_image(lifn, bw=True, boundary=False)
+    potrace(svgfn, bwfn)
+    if not check_basecut(svgfn):
+        msg = "There are disconnected elements in the base cut, turning on boundary layer."
         log(msg)
-        os.system(cmd)
+        cl.save_image(lifn, bw=True, boundary=True)
+        potrace(svgfn, bwfn, turd=turd)
+        assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
+    os.unlink(svgfn)
+    llist.insert(0, bwfn)
+    colors = ["#ff0000", "#00ff00", "#0000ff", "#ff00ff", "#ffff00", "#00ffff"]
+    svgs = []
+    for (idx, fn) in enumerate(llist):
+        svgfn = os.path.splitext(fn)[0]
+        svgfn = "%s_laser.svg" % svgfn
+        svgs.append(svgfn)
+        if idx == 0:
+            potrace(svgfn, fn, turd=turd)
+        else:
+            potrace(svgfn, fn)
     outfn = "%s_laser_merged.svg" % args.name
     merge_svg(svgs, colors, outfn)
 
