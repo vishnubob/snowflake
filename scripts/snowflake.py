@@ -17,7 +17,6 @@ import ImageDraw
 # local
 from sfgen import NameCurve
 
-
 def ensure_python():
     # pylab doesn't play well with pypy
     # so this will cause us to re-exec if
@@ -42,6 +41,7 @@ class CrystalEnvironment(dict):
     def __init__(self, *args, **kw):
         self._init_defaults()
         self.update(*args, **kw)
+        self.factory_settings = self.copy()
 
     def __getattr__(self, name):
         return self[name]
@@ -51,6 +51,9 @@ class CrystalEnvironment(dict):
 
     def __setstate__(self, state):
         self.update(state)
+
+    def get_default(self, key):
+        return self.factory_settings[key]
 
     def randomize(self):
         for key in self:
@@ -212,15 +215,15 @@ class CrystalLattice(object):
             if cell.attached or cell.boundary:
                 continue
             # we use the same coef as the noise coef
-            cell.diffusive_mass += val * self.environment.sigma
+            cell.diffusive_mass += val * self.environment.sigma * cell.diffusive_mass
     
     def adjust_temperature(self, val):
-        self.environment.beta += .01 * val
-        self.environment.theta += .001 * val
-        self.environment.alpha += .005 * val
-        self.environment.kappa += .0001 * val
-        self.environment.mu += .0005 * val
-        self.environment.upsilon += .000005 * val
+        self.environment.beta = .01 * val * self.environment.get_default("beta") + self.environment.get_default("beta")
+        self.environment.theta = .001 * val * self.environment.get_default("theta") + self.environment.get_default("theta")
+        self.environment.alpha = .005 * val * self.environment.get_default("alpha") + self.environment.get_default("alpha")
+        self.environment.kappa = .0001 * val * self.environment.get_default("kappa") + self.environment.get_default("kappa")
+        self.environment.mu = .0005 * val * self.environment.get_default("mu") + self.environment.get_default("mu")
+        self.environment.upsilon = .000005 * val * self.environment.get_default("upsilon") + self.environment.get_default("upsilon")
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -536,7 +539,7 @@ def get_cli():
     parser.add_argument('-l', '--laser', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
     parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
     parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
-    parser.add_argument('-C', '--curves', dest='curves', action='store_true', help='run name as curves')
+    parser.add_argument('-c', '--curves', dest='curves', action='store_true', help='run name as curves')
 
     parser.set_defaults(**DEFAULTS)
     args = parser.parse_args()
