@@ -15,6 +15,8 @@ import Image
 import ImageDraw
 
 # local
+from sfgen import curves
+sys.modules["curves"] = curves
 from sfgen import NameCurve
 
 def ensure_python():
@@ -27,8 +29,7 @@ def ensure_python():
         args = ["python", "python"] + sys.argv
         os.execlp("/usr/bin/env", *args)
 
-logging.basicConfig(format="%(asctime)s (%(process)d): %(message)s", level=logging.DEBUG, datefmt='%d/%m/%y %H:%M:%S')
-log = logging.info
+log = None
 
 X_SCALE_FACTOR = (1.0 / math.sqrt(3))
 
@@ -59,7 +60,7 @@ class CrystalEnvironment(dict):
         for key in self:
             if key == "sigma":
                 continue
-            self[key] += (random.choice([1, -1]) * (random.random() / random.randint(10, 1000)))
+            self[key] += random.choice([1, -1]) / random.randint(100, 1000)
 
     def _init_defaults(self):
         # (3a) 
@@ -97,34 +98,39 @@ class CrystalEnvironment(dict):
 	def _init_special(self):
 		pass
 
+class RandomFlake(CrystalEnvironment):
+    def __init__(self):
+        super(RandomFlake, self).__init__()
+        self.randomize()
+
 class DefaultFlake(CrystalEnvironment):
     pass
 
 class SpikeEndFlake(CrystalEnvironment):
     def __init__(self):
         super(SpikeEndFlake, self).__init__()
-        self["beta"] = 0.8
-        self["gamma"] = 0.34
+        self["beta"] = 1.8
+        self["gamma"] = 0.54
         self["mu"] = 0.09
 
 class FernFlake(CrystalEnvironment):
     def __init__(self):
         super(FernFlake, self).__init__()
-        self["beta"] = 0.8
+        self["beta"] = 1.8
         self["gamma"] = 0.52
         self["mu"] = 0.09
 
 class ClassicFlake(CrystalEnvironment):
     def __init__(self):
         super(ClassicFlake, self).__init__()
-        self["beta"] = 0.9
+        self["beta"] = 1.9
         self["gamma"] = 0.58
 
 class DelicateFlake(CrystalEnvironment):
     def __init__(self):
         super(DelicateFlake, self).__init__()
-        self["beta"] = 0.95
-        self["gamma"] = 0.3
+        self["beta"] = 1.95
+        self["gamma"] = 0.53
 
 class RandomBeautyFlake(CrystalEnvironment):
     def __init__(self):
@@ -211,19 +217,23 @@ class CrystalLattice(object):
         return (x, y)
 
     def adjust_humidity(self, val):
+        val = abs(val)
         for cell in self.cells:
             if cell.attached or cell.boundary:
                 continue
-            # we use the same coef as the noise coef
-            cell.diffusive_mass += val * self.environment.sigma * cell.diffusive_mass
+            # only mutate the cells outside our margin
+            if self.xy_to_polar(cell.xy)[1] > (self.size * self.margin):
+                # we use the same coef as the noise coef
+                cell.diffusive_mass += val * self.environment.sigma
     
     def adjust_temperature(self, val):
         self.environment.beta = .01 * val * self.environment.get_default("beta") + self.environment.get_default("beta")
-        self.environment.theta = .001 * val * self.environment.get_default("theta") + self.environment.get_default("theta")
-        self.environment.alpha = .005 * val * self.environment.get_default("alpha") + self.environment.get_default("alpha")
+        # these values seem to be wicked sensitive
+        self.environment.theta = .01 * val * self.environment.get_default("theta") + self.environment.get_default("theta")
+        self.environment.alpha = .1 * val * self.environment.get_default("alpha") + self.environment.get_default("alpha")
         self.environment.kappa = .0001 * val * self.environment.get_default("kappa") + self.environment.get_default("kappa")
-        self.environment.mu = .0005 * val * self.environment.get_default("mu") + self.environment.get_default("mu")
-        self.environment.upsilon = .000005 * val * self.environment.get_default("upsilon") + self.environment.get_default("upsilon")
+        self.environment.mu = .01 * val * self.environment.get_default("mu") + self.environment.get_default("mu")
+        self.environment.upsilon = .0001 * val * self.environment.get_default("upsilon") + self.environment.get_default("upsilon")
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -231,7 +241,9 @@ class CrystalLattice(object):
         bm = sum([cell.boundary_mass for cell in self.cells if cell])
         acnt = len([cell for cell in self.cells if cell and cell.attached])
         bcnt = len([cell for cell in self.cells if cell and cell.boundary])
-        msg = "Step #%d, %d attached, %d boundary, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
+        #msg = "Step #%d, %d attached, %d boundary, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
+        d = self.snowflake_radius()
+        msg = "Step #%d/%dp (%.2f%%), %d/%d (%.2f%%), %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, d, (float(d * 6) / self.iteration) * 100, acnt, bcnt, (float(bcnt) / acnt) * 100, dm, bm, cm, dm + cm + bm)
         log(msg)
 
     def step(self):
@@ -251,7 +263,7 @@ class CrystalLattice(object):
         self.iteration += 1
         if self.curves:
             self.adjust_temperature(self.curves.get_temperature(self.iteration))
-            self.adjust_humidity(self.curves.get_humidity(self.iteration))
+            #self.adjust_humidity(self.curves.get_humidity(self.iteration))
 
     def translate_xy(self, xy):
         (x, y) = xy
@@ -384,9 +396,10 @@ class CrystalLattice(object):
         img = img.rotate(45)
         img = img.resize((int(round(self.size * X_SCALE_FACTOR)), int(self.size)))
         img = img.crop(self.crop_snowflake(margin=margin))
-        y_sz = int(round((self.size / float(img.size[0])) * img.size[1]))
-        assert y_sz == self.size, "This is critical for laser cutting."
-        img = img.resize((self.size, y_sz))
+        sz = self.size + 400
+        y_sz = int(round((sz / float(img.size[0])) * img.size[1]))
+        assert y_sz == sz, "This is critical for laser cutting."
+        img = img.resize((sz, sz))
         # 
         img.save(fn)
 
@@ -572,7 +585,7 @@ def merge_svg(file_list, color_list, outfn):
             if idx == 0:
                 node.attributes["fill"] = "None"
                 node.attributes["stroke"] = color
-                node.attributes["stroke-width"] = "10"
+                node.attributes["stroke-width"] = ".1"
             else:
                 node.attributes["fill"].nodeValue = color
             idx += 1
@@ -655,7 +668,20 @@ def choose_environment(name):
     ftypes = [cls for cls in globals().values() if type(cls) == type and issubclass(cls, CrystalEnvironment) and cls != CrystalEnvironment]
     return ftypes[len(name) % len(ftypes)]
 
+def setup_logging(name):
+    global log
+    logfn = "%s.log" % name
+    logging.basicConfig(filename=logfn, format="%(asctime)s (%(process)d): %(message)s", level=logging.DEBUG, datefmt='%d/%m/%y %H:%M:%S')
+    log = logging.info
+    soh = logging.StreamHandler(sys.stdout)
+    soh.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s (%(process)d): %(message)s', datefmt='%d/%m/%y %H:%M:%S')
+    soh.setFormatter(formatter)
+    logger = logging.getLogger()
+    logger.addHandler(soh)
+
 def run(args):
+    setup_logging(args.name)
     msg = "Snowflake Generator v0.3"
     log(msg)
     pfn = "%s.pickle" % args.name

@@ -4,6 +4,7 @@ import re
 import os
 from splines import *
 from bisect import bisect_left
+import random
 import math
 import sys
 
@@ -51,13 +52,23 @@ class NameCurve(object):
     Vowels = ['a', 'e', 'i', 'o', 'u']
 
     def __init__(self, name, steps=5000, pause=None):
+        # first thing first, set the random seed based on the name
+        # and lock us into determinism and repeatability.
+        random.seed(name)
         self.steps = steps
         if pause == None:
             self.pause = self.steps * .15
         self.name = str.join('', re.split("\s+", name.lower()))
         self.name_consonants = str.join('', [ch for ch in self.name if ch not in self.Vowels])
         self.name_vowels = str.join('', [ch for ch in self.name if ch in self.Vowels])
-        self.coefs_consonants = [((ord(ch) - ord('a')) / 25.0 - .5) for ch in self.name_consonants]
+        assert self.name_consonants and self.name_vowels
+        # XXX: "cheating"
+        # if there is no final point, we add a synthetic 0 via 'a'
+        if len(self.name_consonants) < 2:
+            self.name_consonants += 'a'
+        if len(self.name_vowels) < 2:
+            self.name_vowels += 'a'
+        self.coefs_consonants = [((ord(ch) - ord('a')) / 12.5) for ch in self.name_consonants]
         self.coefs_vowels = [((ord(ch) - ord('a')) / 25.0 - .5) for ch in self.name_vowels]
         self.step_vowels = (self.steps - self.pause) / max(1, (len(self.name_vowels) - 1))
         self.step_consonants = (self.steps - self.pause) / max(1, (len(self.name_consonants) - 1))
@@ -105,7 +116,7 @@ class NameCurve(object):
         fig = plt.figure()
         ax1 = fig.add_subplot(1, 1, 1)
         ax1.plot([self.hum_curve[x] for x in range(self.steps)], 'r')
-        ax1.set_ylim(-1, 1)
+        ax1.set_ylim(0, 2)
         ax1.set_xlabel("Time (simulation steps)")
         ax1.set_ylabel("Relative Humidity", color='r')
         for tl in ax1.get_yticklabels():
