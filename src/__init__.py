@@ -1,1 +1,1 @@
-from curves import NameCurve
+from curves import *

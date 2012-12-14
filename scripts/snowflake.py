@@ -15,9 +15,8 @@ import Image
 import ImageDraw
 
 # local
-from sfgen import curves
+from sfgen import *
 sys.modules["curves"] = curves
-from sfgen import NameCurve
 
 def ensure_python():
     # pylab doesn't play well with pypy
@@ -39,9 +38,13 @@ def avg_stdev(data):
     return (avg, stdev)
 
 class CrystalEnvironment(dict):
-    def __init__(self, *args, **kw):
+    def __init__(self, curves=None, **kw):
+        self.curves = curves
         self._init_defaults()
-        self.update(*args, **kw)
+        self.update(**kw)
+        self.set_factory_settings()
+
+    def set_factory_settings(self):
         self.factory_settings = self.copy()
 
     def __getattr__(self, name):
@@ -53,6 +56,29 @@ class CrystalEnvironment(dict):
     def __setstate__(self, state):
         self.update(state)
 
+    def step(self, x):
+        if self.curves == None:
+            return
+        for key in self.curves:
+            self[key] = self.curves[key][x]
+
+    @classmethod
+    def build_env(self, name, steps, min_gamma=0.45, max_gamma=0.85):
+        curves = {
+            "beta": (1.3, 2),
+            "theta": (0.01, 0.04),
+            "alpha": (0.02, 0.1),
+            "kappa": (0.001, 0.01),
+            "mu": (0.01, 0.1),
+            "upilson": (0.00001, 0.0001),
+            "sigma": (0.00001, 0.000001),
+        }
+        cs = CurveSet(name, steps, curves)
+        cs.run_graph()
+        env = {key: cs[key][0] for key in curves}
+        env["gamma"] = random.random() * (max_gamma - min_gamma) + min_gamma
+        return CrystalEnvironment(curves=cs, **env)
+
     def get_default(self, key):
         return self.factory_settings[key]
 
@@ -60,7 +86,11 @@ class CrystalEnvironment(dict):
         for key in self:
             if key == "sigma":
                 continue
-            self[key] += random.choice([1, -1]) / random.randint(100, 1000)
+            if key == "gamma":
+                self[key] += 1.0 / random.randint(100, 1000)
+            else:
+                self[key] += random.choice([1.0, -1.0]) / random.randint(100, 1000)
+        self.set_factory_settings()
 
     def _init_defaults(self):
         # (3a) 
@@ -112,6 +142,7 @@ class SpikeEndFlake(CrystalEnvironment):
         self["beta"] = 1.8
         self["gamma"] = 0.54
         self["mu"] = 0.09
+        self.set_factory_settings()
 
 class FernFlake(CrystalEnvironment):
     def __init__(self):
@@ -119,33 +150,43 @@ class FernFlake(CrystalEnvironment):
         self["beta"] = 1.8
         self["gamma"] = 0.52
         self["mu"] = 0.09
+        self.set_factory_settings()
 
 class ClassicFlake(CrystalEnvironment):
     def __init__(self):
         super(ClassicFlake, self).__init__()
         self["beta"] = 1.9
         self["gamma"] = 0.58
+        self.set_factory_settings()
 
 class DelicateFlake(CrystalEnvironment):
     def __init__(self):
         super(DelicateFlake, self).__init__()
         self["beta"] = 1.95
         self["gamma"] = 0.53
+        self.set_factory_settings()
 
 class RandomBeautyFlake(CrystalEnvironment):
     def __init__(self):
         super(RandomBeautyFlake, self).__init__()
         self["beta"] = 1.30
         self["gamma"] = 0.50
+        self.set_factory_settings()
 
 class CrystalLattice(object):
-    def __init__(self, size, environment=None, celltype=None, max_steps=0, margin=None, curves=None):
+    LogHeader = ["dm", "cm", "bm", "acnt", "bcnt", "width", "beta", "theta", "alpha", "kappa", "mu", "upsilon"]
+
+    def __init__(self, size, environment=None, celltype=None, max_steps=0, margin=None, curves=None, datalog=False, debug=False):
         self.size = size
         if environment == None:
             environment = CrystalEnvironment()
         self.environment = environment
+        self.datalog = None
+        if datalog:
+            self.datalog = []
         if celltype == None:
             celltype = SnowflakeCell
+        self.debug = debug
         self.celltype = celltype
         self.iteration = 1
         assert margin > 0 and margin <= 1.0
@@ -178,6 +219,7 @@ class CrystalLattice(object):
         for cell in obj.cells:
             cell.lattice = obj
             cell.env = obj.environment
+            cell.update_boundary()
         return obj
 
     def get_neighbors(self, xy):
@@ -221,19 +263,51 @@ class CrystalLattice(object):
         for cell in self.cells:
             if cell.attached or cell.boundary:
                 continue
+            cell.diffusive_mass += val * self.environment.sigma
             # only mutate the cells outside our margin
-            if self.xy_to_polar(cell.xy)[1] > (self.size * self.margin):
+            #if self.xy_to_polar(cell.xy)[1] > (self.size * self.margin):
                 # we use the same coef as the noise coef
-                cell.diffusive_mass += val * self.environment.sigma
+                #cell.diffusive_mass += val * self.environment.sigma
     
-    def adjust_temperature(self, val):
-        self.environment.beta = .01 * val * self.environment.get_default("beta") + self.environment.get_default("beta")
-        # these values seem to be wicked sensitive
-        self.environment.theta = .01 * val * self.environment.get_default("theta") + self.environment.get_default("theta")
-        self.environment.alpha = .1 * val * self.environment.get_default("alpha") + self.environment.get_default("alpha")
-        self.environment.kappa = .0001 * val * self.environment.get_default("kappa") + self.environment.get_default("kappa")
-        self.environment.mu = .01 * val * self.environment.get_default("mu") + self.environment.get_default("mu")
-        self.environment.upsilon = .0001 * val * self.environment.get_default("upsilon") + self.environment.get_default("upsilon")
+    def log_status(self):
+        if self.datalog == None:
+            return
+        row = []
+        #row.append(self.iteration)
+        dm = sum([cell.diffusive_mass for cell in self.cells if cell])
+        row.append(dm)
+        cm = sum([cell.crystal_mass for cell in self.cells if cell])
+        row.append(cm)
+        bm = sum([cell.boundary_mass for cell in self.cells if cell])
+        row.append(bm)
+        acnt = len([cell for cell in self.cells if cell and cell.attached])
+        row.append(acnt)
+        bcnt = len([cell for cell in self.cells if cell and cell.boundary])
+        row.append(bcnt)
+        d = self.snowflake_radius()
+        row.append(d)
+        row.append(self.environment.beta)
+        row.append(self.environment.theta)
+        row.append(self.environment.alpha)
+        row.append(self.environment.kappa)
+        row.append(self.environment.mu)
+        row.append(self.environment.upsilon)
+        #row.append(self.environment.sigma)
+        #row.append(self.environment.gamma)
+        self.datalog.append(row)
+
+    def write_log(self):
+        if self.datalog == None:
+            return
+        logfn = "datalog.csv"
+        msg = "Saving runtime data to %s" % logfn
+        log(msg)
+        f = open(logfn, 'w')
+        txt = ''
+        txt += str.join(',', self.LogHeader) + '\n'
+        for row in self.datalog:
+            txt += str.join(',', map(str, row)) + '\n'
+        f.write(txt)
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -243,10 +317,11 @@ class CrystalLattice(object):
         bcnt = len([cell for cell in self.cells if cell and cell.boundary])
         #msg = "Step #%d, %d attached, %d boundary, %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, acnt, bcnt, dm, bm, cm, dm + cm + bm)
         d = self.snowflake_radius()
-        msg = "Step #%d/%dp (%.2f%%), %d/%d (%.2f%%), %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, d, (float(d * 6) / self.iteration) * 100, acnt, bcnt, (float(bcnt) / acnt) * 100, dm, bm, cm, dm + cm + bm)
+        msg = "Step #%d/%dp (%.2f%% scl), %d/%d (%.2f%%), %.2f dM, %.2f bM, %.2f cM, tot %.2f M" % (self.iteration, d, (float(d * 2 * X_SCALE_FACTOR) / self.iteration) * 100, acnt, bcnt, (float(bcnt) / acnt) * 100, dm, bm, cm, dm + cm + bm)
         log(msg)
 
     def step(self):
+        self.log_status()
         for cell in self.cells:
             if cell == None or cell.attached:
                 continue
@@ -261,9 +336,7 @@ class CrystalLattice(object):
             cell.step_three()
         # run curves
         self.iteration += 1
-        if self.curves:
-            self.adjust_temperature(self.curves.get_temperature(self.iteration))
-            #self.adjust_humidity(self.curves.get_humidity(self.iteration))
+        self.environment.step(self.iteration)
 
     def translate_xy(self, xy):
         (x, y) = xy
@@ -328,11 +401,16 @@ class CrystalLattice(object):
 
     def grow(self):
         while True:
+            if self.debug:
+                self.print_status()
             self.step()
             if self.iteration % 50 == 0:
-                self.print_status()
+                if not self.debug:
+                    self.print_status()
                 if not self.headroom():
                     break
+        if self.debug:
+            self.print_status()
 
     def save_laser_image(self, fn, layer_cnt):
         import scipy.cluster.vq
@@ -413,6 +491,8 @@ class SnowflakeCell(object):
         self.crystal_mass = 0.0
         self.attached = False
         self.age = 0
+        self.boundary = 0
+        self.attached_neighbors = []
         self.__neighbors = None
 
     def __getstate__(self):
@@ -447,15 +527,21 @@ class SnowflakeCell(object):
             self.__neighbors = self.lattice.get_neighbors(self.xy)
         return self.__neighbors
     
-    @property
-    def attached_neighbors(self):
-        return [cell for cell in self.neighbors if cell.attached]
+    #@property
+    #def attached_neighbors(self):
+    #    return [cell for cell in self.neighbors if cell.attached]
 
-    @property
-    def boundary(self):
-        return (not self.attached) and any([cell.attached for cell in self.neighbors])
+    #@property
+    #def boundary(self):
+    #    return (not self.attached) and any([cell.attached for cell in self.neighbors])
+
+    def update_boundary(self):
+        self.boundary = (not self.attached) and any([cell.attached for cell in self.neighbors])
 
     def step_one(self):
+        self.update_boundary()
+        if self.boundary:
+            self.attached_neighbors = [cell for cell in self.neighbors if cell.attached]
         self._next_dm = self.diffusion_calc()
 
     def step_two(self):
@@ -497,10 +583,11 @@ class SnowflakeCell(object):
     def attachment_step(self):
         if not self.boundary:
             return False
-        if len(self.attached_neighbors) <= 2:
+        attach_count = len(self.attached_neighbors)
+        if attach_count <= 2:
             if self.boundary_mass > self.env.beta:
                 return True
-        elif len(self.attached_neighbors) == 3:
+        elif attach_count == 3:
             if self.boundary_mass >= 1:
                 return True
             else:
@@ -509,7 +596,7 @@ class SnowflakeCell(object):
                     summed_diffusion += cell.diffusive_mass
                 if summed_diffusion < self.env.theta and self.boundary_mass >= self.env.alpha:
                     return True
-        elif len(self.attached_neighbors) >= 4:
+        elif attach_count >= 4:
             return True
         return False
     
@@ -523,50 +610,10 @@ class SnowflakeCell(object):
     def noise_step(self):
         if (self.boundary or self.attached):
             return
-        if random.choice([True, False]):
+        if random.random() >= .5:
             self.diffusive_mass = (1 - self.env.sigma) * self.diffusive_mass
         else:
             self.diffusive_mass = (1 + self.env.sigma) * self.diffusive_mass
-
-DEFAULTS = {
-    "size": 200,
-    "name": "snowflake",
-    "bw": False,
-    "env": '',
-    "pipeline_3d": False,
-    "pipeline_lasercutter": False,
-    "randomize": False,
-    "max_steps": 0,
-    "margin": .42,
-    "curves": False,
-}
-
-def get_cli():
-    parser = argparse.ArgumentParser(description='Snowflake Generator.')
-    parser.add_argument(dest="name", nargs='+', help="The name of the snowflake.")
-    parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
-    parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
-    parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
-    parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
-    parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
-    parser.add_argument('-l', '--laser', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
-    parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
-    parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
-    parser.add_argument('-c', '--curves', dest='curves', action='store_true', help='run name as curves')
-
-    parser.set_defaults(**DEFAULTS)
-    args = parser.parse_args()
-    args.name = str.join('', map(str.lower, args.name))
-    if args.name[-1] == '/':
-        # wart from the shell
-        args.name = args.name[:-1]
-    if not os.path.exists(args.name):
-        os.mkdir(args.name)
-    if args.pipeline_lasercutter:
-        ensure_python()
-    if args.pipeline_3d:
-        args.bw = True
-    return args
 
 def check_basecut(svgfn):
     # ensure there is only one path
@@ -680,6 +727,50 @@ def setup_logging(name):
     logger = logging.getLogger()
     logger.addHandler(soh)
 
+DEFAULTS = {
+    "size": 200,
+    "name": "snowflake",
+    "bw": False,
+    "env": '',
+    "pipeline_3d": False,
+    "pipeline_lasercutter": False,
+    "randomize": False,
+    "max_steps": 0,
+    "margin": .85,
+    "curves": False,
+    "datalog": False,
+    "debug": False,
+}
+
+def get_cli():
+    parser = argparse.ArgumentParser(description='Snowflake Generator.')
+    parser.add_argument(dest="name", nargs='+', help="The name of the snowflake.")
+    parser.add_argument('-s', '--size', dest="size", type=int, help="The size of the snowflake.")
+    parser.add_argument('-e', '--env', dest='env', help='comma seperated key=val env overrides')
+    parser.add_argument('-b', '--bw', dest='bw', action='store_true', help='write out the image in black and white')
+    parser.add_argument('-r', '--randomize', dest='randomize', action='store_true', help='randomize environment.')
+    parser.add_argument('-x', '--extrude', dest='pipeline_3d', action='store_true', help='Enable 3d pipeline.')
+    parser.add_argument('-l', '--laser', dest='pipeline_lasercutter', action='store_true', help='Enable Laser Cutter pipeline.')
+    parser.add_argument('-M', '--max-steps', dest='max_steps', type=int, help='Maximum number of iterations.')
+    parser.add_argument('-m', '--margin', dest='margin', type=float, help='When to stop snowflake growth (between 0 and 1)')
+    parser.add_argument('-c', '--curves', dest='curves', action='store_true', help='run name as curves')
+    parser.add_argument('-L', '--datalog', dest='datalog', action='store_true', help='Enable step wise data logging.')
+    parser.add_argument('-D', '--debug', dest='debug', action='store_true', help='Show every step.')
+
+    parser.set_defaults(**DEFAULTS)
+    args = parser.parse_args()
+    args.name = str.join('', map(str.lower, args.name))
+    if args.name[-1] == '/':
+        # wart from the shell
+        args.name = args.name[:-1]
+    if not os.path.exists(args.name):
+        os.mkdir(args.name)
+    if args.pipeline_lasercutter:
+        ensure_python()
+    if args.pipeline_3d:
+        args.bw = True
+    return args
+
 def run(args):
     setup_logging(args.name)
     msg = "Snowflake Generator v0.3"
@@ -702,20 +793,17 @@ def run(args):
             log(msg)
             kw["environment"] = env
         elif args.curves:
-            # choose environment
-            env = choose_environment(args.name)
-            msg = "%s selected %s environment." % (args.name, env.__name__)
-            log(msg)
-            kw["environment"] = env()
-            curves = NameCurve(args.name)
-            curves.run_graph()
-            kw["curves"] = curves
+            env = CrystalEnvironment.build_env(args.name, 50000)
+            kw["environment"] = env
         kw["max_steps"] = args.max_steps
         kw["margin"] = args.margin
+        kw["datalog"] = args.datalog
+        kw["debug"] = args.debug
         cl = CrystalLattice(args.size, **kw)
         try:
             cl.grow()
         finally:
+            cl.write_log()
             cl.save_lattice(pfn)
             cl.save_image(ifn, bw=args.bw)
     if args.pipeline_3d:

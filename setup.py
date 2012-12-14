@@ -14,6 +14,7 @@ snowflake = {
                     "sfgen.__init__", 
                     "sfgen.curves", 
                     "sfgen.splines", 
+                    "sfgen.pyrand", 
                 ],
     "scripts":[
                 "scripts/snowflake.py",

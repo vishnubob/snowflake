@@ -3,7 +3,7 @@ import os
 import sys
 from multiprocessing import Pool
 
-CMD = "snowflake.py -c -s 600 -M 5000 %s"
+CMD = "snowflake.py -c -s 600 -M 50000 %s"
 def name_snowflake(name):
     cmd = CMD % name
     print cmd
