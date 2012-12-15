@@ -11,8 +11,12 @@ import re
 import colorsys
 from xml.dom.minidom import parse
 
-import Image
-import ImageDraw
+try:
+    import Image
+    import ImageDraw
+except ImportError:
+    from PIL import Image
+    from PIL import ImageDraw
 
 # local
 from sfgen import *
@@ -48,13 +52,25 @@ class CrystalEnvironment(dict):
         self.factory_settings = self.copy()
 
     def __getattr__(self, name):
+        if name not in self:
+            return AttributeError, "no such thing brah: %s" % name
         return self[name]
 
+    def __getnewargs__(self):
+        return ()
+
     def __getstate__(self):
-        return dict(self)
+        return (self.curves, self.factory_settings, dict(self))
 
     def __setstate__(self, state):
-        self.update(state)
+        if type(state) == dict:
+            self.update(state)
+            self.curves = None
+            self.set_factory_settings()
+        else:
+            self.curves = state[0]
+            self.factory_settings = state[1]
+            self.update(state[2])
 
     def step(self, x):
         if self.curves == None:
@@ -128,51 +144,6 @@ class CrystalEnvironment(dict):
 	def _init_special(self):
 		pass
 
-class RandomFlake(CrystalEnvironment):
-    def __init__(self):
-        super(RandomFlake, self).__init__()
-        self.randomize()
-
-class DefaultFlake(CrystalEnvironment):
-    pass
-
-class SpikeEndFlake(CrystalEnvironment):
-    def __init__(self):
-        super(SpikeEndFlake, self).__init__()
-        self["beta"] = 1.8
-        self["gamma"] = 0.54
-        self["mu"] = 0.09
-        self.set_factory_settings()
-
-class FernFlake(CrystalEnvironment):
-    def __init__(self):
-        super(FernFlake, self).__init__()
-        self["beta"] = 1.8
-        self["gamma"] = 0.52
-        self["mu"] = 0.09
-        self.set_factory_settings()
-
-class ClassicFlake(CrystalEnvironment):
-    def __init__(self):
-        super(ClassicFlake, self).__init__()
-        self["beta"] = 1.9
-        self["gamma"] = 0.58
-        self.set_factory_settings()
-
-class DelicateFlake(CrystalEnvironment):
-    def __init__(self):
-        super(DelicateFlake, self).__init__()
-        self["beta"] = 1.95
-        self["gamma"] = 0.53
-        self.set_factory_settings()
-
-class RandomBeautyFlake(CrystalEnvironment):
-    def __init__(self):
-        super(RandomBeautyFlake, self).__init__()
-        self["beta"] = 1.30
-        self["gamma"] = 0.50
-        self.set_factory_settings()
-
 class CrystalLattice(object):
     LogHeader = ["dm", "cm", "bm", "acnt", "bcnt", "width", "beta", "theta", "alpha", "kappa", "mu", "upsilon"]
 
@@ -182,8 +153,10 @@ class CrystalLattice(object):
             environment = CrystalEnvironment()
         self.environment = environment
         self.datalog = None
+        self.celllog = None
         if datalog:
             self.datalog = []
+            self.celllog = []
         if celltype == None:
             celltype = SnowflakeCell
         self.debug = debug
@@ -208,7 +181,7 @@ class CrystalLattice(object):
         msg = "Saving %s..." % fn
         log(msg)
         f = open(fn, 'wb')
-        pickle.dump(self, f)
+        pickle.dump(self, f, protocol=-1)
 
     @classmethod
     def load_lattice(cls, fn):
@@ -274,12 +247,12 @@ class CrystalLattice(object):
             return
         row = []
         #row.append(self.iteration)
-        dm = sum([cell.diffusive_mass for cell in self.cells if cell])
-        row.append(dm)
-        cm = sum([cell.crystal_mass for cell in self.cells if cell])
-        row.append(cm)
-        bm = sum([cell.boundary_mass for cell in self.cells if cell])
-        row.append(bm)
+        dm = [cell.diffusive_mass for cell in self.cells if cell]
+        row.append(sum(dm))
+        cm = [cell.crystal_mass for cell in self.cells if cell]
+        row.append(sum(cm))
+        bm = [cell.boundary_mass for cell in self.cells if cell]
+        row.append(sum(bm))
         acnt = len([cell for cell in self.cells if cell and cell.attached])
         row.append(acnt)
         bcnt = len([cell for cell in self.cells if cell and cell.boundary])
@@ -295,8 +268,14 @@ class CrystalLattice(object):
         #row.append(self.environment.sigma)
         #row.append(self.environment.gamma)
         self.datalog.append(row)
+        # log the cells
+        self.celllog.append((self.iteration, dm, cm))
 
     def write_log(self):
+        self.write_datalog()
+        self.write_celllog()
+
+    def write_datalog(self):
         if self.datalog == None:
             return
         logfn = "datalog.csv"
@@ -308,6 +287,16 @@ class CrystalLattice(object):
         for row in self.datalog:
             txt += str.join(',', map(str, row)) + '\n'
         f.write(txt)
+
+    def write_celllog(self):
+        if not self.celllog:
+            return
+        logfn = "cell_log_%d.pickle" % self.iteration
+        msg = "Saving cell log to %s" % logfn
+        f = open(logfn, 'wb')
+        pickle.dump(self.celllog, f, protocol=-1)
+        log(msg)
+        self.celllog = []
 
     def print_status(self):
         dm = sum([cell.diffusive_mass for cell in self.cells if cell])
@@ -405,6 +394,7 @@ class CrystalLattice(object):
                 self.print_status()
             self.step()
             if self.iteration % 50 == 0:
+                self.write_celllog()
                 if not self.debug:
                     self.print_status()
                 if not self.headroom():
@@ -710,10 +700,6 @@ def pipeline_3d(args):
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
-
-def choose_environment(name):
-    ftypes = [cls for cls in globals().values() if type(cls) == type and issubclass(cls, CrystalEnvironment) and cls != CrystalEnvironment]
-    return ftypes[len(name) % len(ftypes)]
 
 def setup_logging(name):
     global log
