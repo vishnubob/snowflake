@@ -1,6 +1,19 @@
 #!/usr/bin/env pypy
 
+import os
+import sys
 from sfgen import *
+
+def ensure_python():
+    # pylab doesn't play well with pypy
+    # so this will cause us to re-exec if
+    # we are in pypy ... do not use if you want pypy
+    if sys.subversion[0] == "PyPy":
+        msg = "Restarting within CPython environment to accomdate scipy/numpy"
+        logging.warning(msg)
+        args = ["python", "python"] + sys.argv
+        os.execlp("/usr/bin/env", *args)
+
 
 def get_cli():
     parser = argparse.ArgumentParser(description='Snowflake Generator.')
@@ -30,6 +43,8 @@ def get_cli():
         ensure_python()
     if args.pipeline_3d:
         args.bw = True
+    if args.pipeline_3d or args.pipeline_lasercutter:
+        ensure_python()
     return args
 
 if __name__ == "__main__":

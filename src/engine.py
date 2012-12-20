@@ -13,6 +13,8 @@ import bisect
 import operator
 from xml.dom.minidom import parse
 
+InkscapePath = "/Applications/Inkscape.app/Contents/Resources/bin/inkscape"
+
 try:
     import Image
     import ImageDraw
@@ -23,16 +25,6 @@ except ImportError:
 # local
 from sfgen import *
 sys.modules["curves"] = curves
-
-def ensure_python():
-    # pylab doesn't play well with pypy
-    # so this will cause us to re-exec if
-    # we are in pypy ... do not use if you want pypy
-    if sys.subversion[0] == "PyPy":
-        msg = "Restarting within CPython environment to accomdate scipy/numpy"
-        logging.warning(msg)
-        args = ["python", "python"] + sys.argv
-        os.execlp("/usr/bin/env", *args)
 
 def avg_stdev(data):
     avg = sum(data) / float(len(data))
@@ -472,7 +464,7 @@ class CrystalLattice(object):
     def save_image(self, fn, **kw):
         import sfgen
         r = sfgen.RenderSnowflake(self)
-        r.save_image(fn, resize=self.size + 400, **kw)
+        r.save_image(fn, **kw)
 
 class SnowflakeCell(object):
     def __init__(self, xy, lattice):
@@ -623,17 +615,22 @@ def merge_svg(file_list, color_list, outfn):
         svg = parse(svgfn)
         for node in svg.getElementsByTagName("g"):
             if idx == 0:
-                node.attributes["fill"] = "None"
-                node.attributes["stroke"] = color
+                # write a new group
+                container = svg.createElement("g")
+                container.setAttribute("transform", node.attributes["transform"].nodeValue)
+                node.parentNode.replaceChild(container, node)
+                container.appendChild(node)
+                node.attributes["fill"] = "none"
+                node.attributes["stroke"] = "#ff0000"
                 node.attributes["stroke-width"] = ".1"
             else:
                 node.attributes["fill"].nodeValue = color
+            del node.attributes["transform"]
             idx += 1
+            import_nodes = svg.importNode(node, True)
+            container.appendChild(import_nodes)
             if first == None:
                 first = svg
-                break
-            import_nodes = svg.importNode(node, True)
-            first.childNodes[1].appendChild(import_nodes)
     f = open(outfn, 'w')
     f.write(first.toxml())
 
@@ -648,25 +645,30 @@ def potrace(svgfn, fn, turd=None):
     os.system(cmd)
 
 # laser cutter pipeline
-def pipeline_lasercutter(args, cl, turd=10):
-    lifn = "%s_laser.bmp" % args.name
-    svgfn = "%s_laser_test.svg" % args.name
-    bwfn = "%s_laser_bw.bmp" % args.name
-    llist = cl.save_laser_image(lifn, 3)
+def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
+    # layers
+    rs = RenderSnowflake(lattice)
+    layerfn = "%s_layer_%%d.bmp" % args.name
+    resize = inches * dpi
+    fnlist = rs.save_layers(layerfn, 2, resize=resize, margin=1)
+    # we want to drop the heaviest layer
+    del fnlist[0]
     # try to save o'natural
-    cl.save_image(lifn, bw=True, boundary=False)
-    potrace(svgfn, bwfn)
+    imgfn = "%s_bw.bmp" % args.name
+    svgfn = "%s_bw.svg" % args.name
+    lattice.save_image(imgfn, scheme=BlackWhite(lattice), resize=resize, margin=1)
+    potrace(svgfn, imgfn, turd=2000)
     if not check_basecut(svgfn):
         msg = "There are disconnected elements in the base cut, turning on boundary layer."
         log(msg)
-        cl.save_image(lifn, bw=True, boundary=True)
+        lattice.save_image(lifn, bw=True, boundary=True)
         potrace(svgfn, bwfn, turd=2000)
         assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
     os.unlink(svgfn)
-    llist.insert(0, bwfn)
+    fnlist.insert(0, imgfn)
     colors = ["#ff0000", "#00ff00", "#0000ff", "#ff00ff", "#ffff00", "#00ffff"]
     svgs = []
-    for (idx, fn) in enumerate(llist):
+    for (idx, fn) in enumerate(fnlist):
         svgfn = os.path.splitext(fn)[0]
         svgfn = "%s_laser.svg" % svgfn
         svgs.append(svgfn)
@@ -674,23 +676,36 @@ def pipeline_lasercutter(args, cl, turd=10):
             potrace(svgfn, fn, turd=turd)
         else:
             potrace(svgfn, fn)
-    outfn = "%s_laser_merged.svg" % args.name
-    merge_svg(svgs, colors, outfn)
+    svgfn = "%s_laser_merged.svg" % args.name
+    epsfn = "%s_laser_merged.eps" % args.name
+    merge_svg(svgs, colors, svgfn)
+    # move to eps
+    cmd = "%s %s -E %s" % (InkscapePath, svgfn, epsfn)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
 
 # 3d pipeline
 def pipeline_3d(lattice, args):
     imgfn = "%s_bw.bmp" % args.name
     lattice.save_image(imgfn, scheme=BlackWhite(lattice))
+    # layers
+    rs = RenderSnowflake(lattice)
+    layerfn = "%s_layer_%%d.bmp" % args.name
+    fnlist = [imgfn] + rs.save_layers(layerfn, 3, resize=args.size + 400)
     #
-    cmd = "potrace -M .1 --tight -i -b eps -o %s.eps %s_bw.bmp" % (args.name, args.name)
-    msg = "Running '%s'" % cmd
-    log(msg)
-    os.system(cmd)
-    #
-    cmd = "pstoedit -dt -f dxf:-polyaslines %s.eps %s.dxf" % (args.name, args.name)
-    msg = "Running '%s'" % cmd
-    log(msg)
-    os.system(cmd)
+    for fn in fnlist:
+        stem = os.path.splitext(os.path.split(fn)[-1])[0]
+        cmd = "potrace -M .1 --tight -i -b eps -o %s.eps %s.bmp" % (stem, stem)
+        msg = "Running '%s'" % cmd
+        log(msg)
+        os.system(cmd)
+        #
+        cmd = "pstoedit -dt -f dxf:-polyaslines %s.eps %s.dxf" % (stem, stem)
+        msg = "Running '%s'" % cmd
+        log(msg)
+        os.system(cmd)
+    return
     #
     scad_fn = "%s.scad" % args.name
     f = open(scad_fn, 'w')
