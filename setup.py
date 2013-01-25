@@ -17,6 +17,7 @@ snowflake = {
                     "sfgen.engine", 
                     "sfgen.graphics", 
                 ],
+    "package_data": {"sfgen": ["etc/*.ini"]},
     "scripts":[
                 "scripts/snowflake.py",
                ],

@@ -278,6 +278,9 @@ class CrystalLattice(object):
         self.reality_check()
         center_pt = self._cell_index((self.size / 2, self.size / 2))
         self.cells[center_pt].attach(1)
+        # fun experiments
+        #self.cells[center_pt+4].attach(1)
+        #self.cells[center_pt-4].attach(1)
 
     def _xy_ok(self, xy):
         (x, y) = xy
@@ -285,7 +288,7 @@ class CrystalLattice(object):
 
     def _cell_index(self, xy):
         (x, y) = xy
-        return y * self.size + x
+        return int(round(y * self.size + x))
 
     def _cell_xy(self, idx):
         y = idx / self.size
@@ -648,21 +651,22 @@ def potrace(svgfn, fn, turd=None):
 def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
     # layers
     rs = RenderSnowflake(lattice)
-    layerfn = "%s_layer_%%d.bmp" % args.name
+    name = str.join('', [c for c in args.name if c.islower()])
+    layerfn = "%s_layer_%%d.bmp" % name
     resize = inches * dpi
     fnlist = rs.save_layers(layerfn, 2, resize=resize, margin=1)
     # we want to drop the heaviest layer
     del fnlist[0]
     # try to save o'natural
-    imgfn = "%s_bw.bmp" % args.name
-    svgfn = "%s_bw.svg" % args.name
+    imgfn = "%s_bw.bmp" % name
+    svgfn = "%s_bw.svg" % name
     lattice.save_image(imgfn, scheme=BlackWhite(lattice), resize=resize, margin=1)
     potrace(svgfn, imgfn, turd=2000)
     if not check_basecut(svgfn):
         msg = "There are disconnected elements in the base cut, turning on boundary layer."
         log(msg)
-        lattice.save_image(lifn, bw=True, boundary=True)
-        potrace(svgfn, bwfn, turd=2000)
+        lattice.save_image(imgfn, scheme=BlackWhite(lattice, boundary=True), resize=resize, margin=1)
+        potrace(svgfn, imgfn, turd=2000)
         assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
     os.unlink(svgfn)
     fnlist.insert(0, imgfn)
@@ -676,8 +680,8 @@ def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
             potrace(svgfn, fn, turd=turd)
         else:
             potrace(svgfn, fn)
-    svgfn = "%s_laser_merged.svg" % args.name
-    epsfn = "%s_laser_merged.eps" % args.name
+    svgfn = "%s_laser_merged.svg" % name
+    epsfn = "%s_laser_merged.eps" % name
     merge_svg(svgs, colors, svgfn)
     # move to eps
     cmd = "%s %s -E %s" % (InkscapePath, svgfn, epsfn)
@@ -686,38 +690,44 @@ def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
     os.system(cmd)
 
 # 3d pipeline
-def pipeline_3d(lattice, args):
+def pipeline_3d(args, lattice, inches=3, dpi=96, turd=10):
+    resize = inches * dpi
+    # try to save o'natural
     imgfn = "%s_bw.bmp" % args.name
-    lattice.save_image(imgfn, scheme=BlackWhite(lattice))
-    # layers
-    rs = RenderSnowflake(lattice)
-    layerfn = "%s_layer_%%d.bmp" % args.name
-    fnlist = [imgfn] + rs.save_layers(layerfn, 3, resize=args.size + 400)
-    #
-    for fn in fnlist:
-        stem = os.path.splitext(os.path.split(fn)[-1])[0]
-        cmd = "potrace -M .1 --tight -i -b eps -o %s.eps %s.bmp" % (stem, stem)
-        msg = "Running '%s'" % cmd
+    svgfn = "%s_bw.svg" % args.name
+    lattice.save_image(imgfn, scheme=BlackWhite(lattice), resize=resize, margin=1)
+    potrace(svgfn, imgfn, turd=2000)
+    if not check_basecut(svgfn):
+        msg = "There are disconnected elements in the base cut, turning on boundary layer."
         log(msg)
-        os.system(cmd)
-        #
-        cmd = "pstoedit -dt -f dxf:-polyaslines %s.eps %s.dxf" % (stem, stem)
-        msg = "Running '%s'" % cmd
-        log(msg)
-        os.system(cmd)
-    return
+        lattice.save_image(imgfn, bw=True, boundary=True)
+        potrace(svgfn, imgfn, turd=2000)
+        assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
     #
-    scad_fn = "%s.scad" % args.name
-    f = open(scad_fn, 'w')
-    scad_txt = 'scale([30, 30, 30]) linear_extrude(height=.25, layer="0") import("%s.dxf");\n' % args.name
-    f.write(scad_txt)
-    f.close()
-    cmd = "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD -o %s.stl %s" % (args.name, scad_fn)
+    epsfn = "%s_3d.eps" % args.name
+    dxffn = "%s_3d.dxf" % args.name
+    cmd = "potrace -M .1 --tight -i -b eps -o %s %s" % (epsfn, imgfn)
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
     #
-    cmd = "python /Applications/Cura/Cura.app/Contents/Resources/Cura/cura.py -s %s.stl -i snowflake.ini" % args.name
+    cmd = "pstoedit -dt -f dxf:-polyaslines %s %s" % (epsfn, dxffn)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+    #
+    scad_fn = "%s_3d.scad" % args.name
+    stlfn = "%s_3d.stl" % args.name
+    f = open(scad_fn, 'w')
+    scad_txt = 'scale([30, 30, 30]) linear_extrude(height=.18, layer="0") import("%s");\n' % dxffn
+    f.write(scad_txt)
+    f.close()
+    cmd = "/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD -o %s %s" % (stlfn, scad_fn)
+    msg = "Running '%s'" % cmd
+    log(msg)
+    os.system(cmd)
+    #
+    cmd = "python /Applications/Cura/Cura.app/Contents/Resources/Cura/cura.py -s %s -i %s" % (stlfn, SNOWFLAKE_INI)
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
@@ -776,7 +786,7 @@ def run(args):
             #cl.save_image(ifn, bw=args.bw)
             cl.save_image(ifn)
     if args.pipeline_3d:
-        pipeline_3d(cl, args)
+        pipeline_3d(args, cl)
     if args.pipeline_lasercutter:
         pipeline_lasercutter(args, cl)
     if args.movie:

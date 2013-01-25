@@ -1,6 +1,8 @@
 import logging
 import math
+import os
 
+SNOWFLAKE_INI = os.path.join(os.path.split(__file__)[0], "etc", "snowflake.ini")
 logging.basicConfig(format="%(asctime)s (%(process)d): %(message)s", level=logging.DEBUG, datefmt='%d/%m/%y %H:%M:%S')
 log = logging.info
 
