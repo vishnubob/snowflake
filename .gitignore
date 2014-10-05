@@ -1,8 +1,6 @@
 build
 env
-*.svg
 *.bmp
-*.png
 *.pickle
 *.eps
 *.gcode
