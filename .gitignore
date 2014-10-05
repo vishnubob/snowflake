@@ -1,3 +1,5 @@
+build
+env
 *.svg
 *.bmp
 *.png
