@@ -9,7 +9,7 @@ random.seed("i am a big purple potato")
 parser = argparse.ArgumentParser()
 
 parser.add_argument('-g', '--grid', default=None)
-parser.add_argument('-o', '--output', default='collage.png')
+parser.add_argument('-o', '--output', default='collage.jpg')
 parser.add_argument('images', nargs='+')
 
 args = parser.parse_args()
@@ -23,7 +23,7 @@ else:
     (grid_width, grid_height) = n, 1
 
 images = []
-target_size = 300
+target_size = 1000
 
 random.shuffle(args.images)
 
@@ -54,5 +54,5 @@ for (idx, image) in enumerate(images):
         break
     collage.paste(image.copy(), (x * target_size, y * target_size))
 
-collage = collage.resize((1024, 1024))
-collage.save(open(args.output, 'wb'))
+collage = collage.resize((4096, 4096))
+collage.save(open(args.output, 'wb'), quality=50)
