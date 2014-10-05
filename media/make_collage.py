@@ -54,5 +54,16 @@ for (idx, image) in enumerate(images):
         break
     collage.paste(image.copy(), (x * target_size, y * target_size))
 
-collage = collage.resize((4096, 4096))
-collage.save(open(args.output, 'wb'), quality=50)
+collage.save(open("collage_huge.png", 'wb'))
+# large
+large = collage.resize((4096, 4096))
+large.save(open("collage_large.jpg", 'wb'))
+# medium
+medium = collage.resize((1024, 1024))
+medium.save(open("collage_medium.jpg", 'wb'))
+# small
+medium = collage.resize((640, 640))
+medium.save(open("collage_medium.jpg", 'wb'))
+# small
+small = collage.resize((200, 200))
+small.save(open("collage_small.jpg", 'wb'))
