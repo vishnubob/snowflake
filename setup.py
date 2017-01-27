@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from distutils.core import setup, Extension
+from setuptools import setup
 
 snowflake = {
     "name":"snowflake",
@@ -17,6 +17,9 @@ snowflake = {
                     "sfgen.engine", 
                     "sfgen.graphics", 
                 ],
+    "install_requires": [
+        "pillow",
+    ],
     "package_data": {"sfgen": ["etc/*.ini"]},
     "scripts":[
                 "scripts/snowflake.py",

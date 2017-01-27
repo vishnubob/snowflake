@@ -618,16 +618,18 @@ def merge_svg(file_list, color_list, outfn):
         svg = parse(svgfn)
         for node in svg.getElementsByTagName("g"):
             if idx == 0:
+                # cut layer
                 # write a new group
                 container = svg.createElement("g")
                 container.setAttribute("transform", node.attributes["transform"].nodeValue)
                 node.parentNode.replaceChild(container, node)
                 container.appendChild(node)
                 node.attributes["fill"] = "none"
-                node.attributes["stroke"] = "#ff0000"
-                node.attributes["stroke-width"] = ".1"
+                node.attributes["stroke"] = "rgb(0, 0, 255)"
+                node.attributes["stroke-opacity"] = "1"
+                node.attributes["stroke-width"] = ".01mm"
             else:
-                node.attributes["fill"].nodeValue = color
+                node.attributes["fill"] = color
             del node.attributes["transform"]
             idx += 1
             import_nodes = svg.importNode(node, True)
@@ -637,12 +639,15 @@ def merge_svg(file_list, color_list, outfn):
     f = open(outfn, 'w')
     f.write(first.toxml())
 
-def potrace(svgfn, fn, turd=None):
-    if turd:
-        # "turd" supression, important for the cut layer
-        cmd = "potrace -i -b svg -t %s -o %s %s" % (turd, svgfn, fn)
-    else:
-        cmd = "potrace -i -b svg -o %s %s" % (svgfn, fn)
+def potrace(svgfn, fn, turd=None, size=None):
+    cmd = ["potrace", "-i", "-b", "svg"]
+    if turd != None:
+        cmd.extend(["-t", str(turd)])
+    if size != None:
+        sz = map(str, size)
+        cmd.extend(["-W", sz[0], "-H", sz[1]])
+    cmd.extend(["-o", svgfn, fn])
+    cmd = str.join(' ', cmd)
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
@@ -652,6 +657,7 @@ def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
     # layers
     rs = RenderSnowflake(lattice)
     name = str.join('', [c for c in args.name if c.islower()])
+    size = args.target_size
     layerfn = "%s_layer_%%d.bmp" % name
     resize = inches * dpi
     fnlist = rs.save_layers(layerfn, 2, resize=resize, margin=1)
@@ -670,24 +676,29 @@ def pipeline_lasercutter(args, lattice, inches=3, dpi=96, turd=10):
         assert check_basecut(svgfn), "Despite best efforts, base cut is still non-contiguous."
     os.unlink(svgfn)
     fnlist.insert(0, imgfn)
-    colors = ["#ff0000", "#00ff00", "#0000ff", "#ff00ff", "#ffff00", "#00ffff"]
+    # adjusted for ponoko
+    # cut layer is blue
+    # etch layer are black, or shades of grey
+    colors = ["#000000", "#111111", "#222222", "#333333", "#444444", "#555555"]
     svgs = []
     for (idx, fn) in enumerate(fnlist):
         svgfn = os.path.splitext(fn)[0]
         svgfn = "%s_laser.svg" % svgfn
         svgs.append(svgfn)
         if idx == 0:
-            potrace(svgfn, fn, turd=turd)
+            potrace(svgfn, fn, turd=turd, size=size)
         else:
-            potrace(svgfn, fn)
+            potrace(svgfn, fn, size=size)
     svgfn = "%s_laser_merged.svg" % name
     epsfn = "%s_laser_merged.eps" % name
     merge_svg(svgs, colors, svgfn)
+    """
     # move to eps
     cmd = "%s %s -E %s" % (InkscapePath, svgfn, epsfn)
     msg = "Running '%s'" % cmd
     log(msg)
     os.system(cmd)
+    """
 
 # 3d pipeline
 def pipeline_3d(args, lattice, inches=3, dpi=96, turd=10):

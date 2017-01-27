@@ -11,8 +11,10 @@ def ensure_python():
     if sys.subversion[0] == "PyPy":
         msg = "Restarting within CPython environment to accomdate scipy/numpy"
         logging.warning(msg)
-        args = ["python", "python"] + sys.argv
-        os.execlp("/usr/bin/env", *args)
+        args = ["/usr/local/bin/python", "python"] + sys.argv
+        #os.execlp("/usr/bin/env", *args)
+        print args
+        os.execlp(*args)
 
 
 def get_cli():
@@ -30,10 +32,15 @@ def get_cli():
     parser.add_argument('-L', '--datalog', dest='datalog', action='store_true', help='Enable step wise data logging.')
     parser.add_argument('-D', '--debug', dest='debug', action='store_true', help='Show every step.')
     parser.add_argument('-V', '--movie', dest='movie', action='store_true', help='Render a movie.')
+    parser.add_argument('-W', '--width', dest='width', type=float, help="Width of target render.")
+    parser.add_argument('-H', '--height', dest='height', type=float, help="Height of target render.")
 
     parser.set_defaults(**SNOWFLAKE_DEFAULTS)
     args = parser.parse_args()
     args.name = str.join('', map(str.lower, args.name))
+    args.target_size = None
+    if args.width and args.height:
+        args.target_size = (args.width, args.height)
     if args.name[-1] == '/':
         # wart from the shell
         args.name = args.name[:-1]

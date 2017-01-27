@@ -1,3 +1,5 @@
+![Example Snowflakes](https://raw.githubusercontent.com/vishnubob/snowflake/master/media/collage_medium.jpg)
+
 This is a snowflake simulator written in python by Rachael Holmes and Giles
 Hall.  It builds realistic looking snowflakes by modeling the phase
 transistions between water molecules at a mesoscopic scale.  The model is
@@ -19,4 +21,4 @@ Requirements for 3D Printing:
     - PIL (PyPy/Python accessible)
     - potrace (For translating SVG)
 
-![Example Snowflake](http://i.imgur.com/GOJaV.png)
+![Example Snowflake](https://raw.githubusercontent.com/vishnubob/snowflake/master/media/example.png)

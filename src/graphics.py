@@ -127,7 +127,7 @@ class RenderSnowflake(object):
         log(msg)
         content = str.join('', [str.join('', map(chr, scheme(cell))) for cell in self.cells])
         img = Image.new("RGB", (self.lattice.size, self.lattice.size))
-        img.fromstring(content)
+        img.frombytes(content)
         del content
 
         # post-process
